@@ -24,6 +24,7 @@ var CSS_ST = {
   customers:    [],
   agingRows:    [],
   selectedCols: [],
+  modalCols:    [],   // per-customer column selection while modal is open
   toTags:       [],
   ccTags:       [],
   // Multi-value filter tags per field (arrays of strings)
@@ -46,7 +47,8 @@ var ALL_COLS = [
   'Doc','Invoice','Inv. List','Delivery','Inv Date','Due Date','Terms',
   'Current','Over Due  1','Over Due 31','Over Due 61','Over Due 91','Over Due 121',
   'Inv Balance','Comments','Header Text','Business Unit','END Customer',
-  'Customer Material','TYPE','Delivery Num'
+  'Customer Material','TYPE','Delivery Num',
+  'Collector Comments','Promised Date','Other'
 ];
 var DEFAULT_COLS = [
   'Company Name','SO Number','Customer Name','Cust No.','Customer PO','Pull Number',
@@ -64,7 +66,8 @@ var COL_KEY_MAP = {
   'Over Due 61':'OverDue61','Over Due 91':'OverDue91','Over Due 121':'OverDue121',
   'Inv Balance':'InvBalance','Comments':'Comments','Header Text':'HeaderText',
   'Business Unit':'BusinessUnit','END Customer':'ENDCustomer',
-  'Customer Material':'CustomerMaterial','TYPE':'TYPE','Delivery Num':'DeliveryNum'
+  'Customer Material':'CustomerMaterial','TYPE':'TYPE','Delivery Num':'DeliveryNum',
+  'Collector Comments':'CollectorComments','Promised Date':'PromisedDate','Other':'Other'
 };
 
 // ── DOM HELPERS ──────────────────────────────────────────
@@ -278,6 +281,7 @@ function normaliseSetupRow(r, idx) {
     schedtime:    schedV,
     time:         '08:00',
     group:        String(g(['Group','group'])||'').trim(),
+    cols:         String(g(['Statement Columns','StatementColumns','Columns'])||'').trim(),
     _src:         r
   };
 }
@@ -301,6 +305,7 @@ function customersToRows() {
       'Include ARMA':         c.arma    ? 'Y' : '',
       'Include Credit':       c.credit  ? 'Y' : '',
       'Group':                c.group||'',
+      'Statement Columns':    c.cols||'',
       'Schedule':             c.schedule,
       'Schedule Time':        c.schedtime
     };
@@ -328,7 +333,22 @@ function buildSetupXlsx() {
   return XLSX.write(wb, { bookType:'xlsx', type:'array' });
 }
 
-// ── LOAD FROM SHAREPOINT ─────────────────────────────────
+// ── COLUMN RESOLUTION ────────────────────────────────────
+// Returns the effective column list for a customer statement:
+//   1. Customer-specific override (c.cols, pipe-separated), if set
+//   2. Global selection (CSS_ST.selectedCols), if non-empty
+//   3. Hard default (DEFAULT_COLS)
+function getColsForCustomer(cust) {
+  if(cust && cust.cols && cust.cols.trim()) {
+    var custCols = cust.cols.split('|').map(function(v){return v.trim();}).filter(Boolean);
+    // Only keep valid column names
+    var valid = custCols.filter(function(c){ return ALL_COLS.indexOf(c) > -1; });
+    if(valid.length) return valid;
+  }
+  return CSS_ST.selectedCols.length ? CSS_ST.selectedCols : DEFAULT_COLS;
+}
+
+
 // Two-phase: load Setup first (fast, small), then Aging in background (large).
 function loadFromSharePoint(forceRefresh) {
   hideAlerts();
@@ -447,7 +467,10 @@ function loadAgingBackground(forceRefresh) {
           'TYPE':             r['TYPE'],
           'Delivery Num':     r['Delivery Num'],
           'Collector':        r['Collector']||r['Collector Name'],
-          'Company Name':     r['Company Name']
+          'Company Name':     r['Company Name'],
+          'Collector Comments': r['Collector Comments']||r['CollectorComments'],
+          'Promised Date':    r['Promised Date'],
+          'Other':            r['Other']
         };
       });
       var json = JSON.stringify({ rows: slim, ts: Date.now(), createdDate: (G('aging-file-time')&&G('aging-file-time')._createdDate)||null });
@@ -473,7 +496,10 @@ function loadAgingBackground(forceRefresh) {
             'Customer Material':r['Customer Material'],
             'TYPE':            r['TYPE'],
             'Collector':       r['Collector']||r['Collector Name'],
-            'Customer Name':   r['Customer Name']
+            'Customer Name':   r['Customer Name'],
+            'Collector Comments': r['Collector Comments']||r['CollectorComments'],
+            'Promised Date':   r['Promised Date'],
+            'Other':           r['Other']
           };
         });
         var j2 = JSON.stringify({ rows: micro, ts: Date.now(), slim: true });
@@ -644,6 +670,7 @@ function renderCustomers() {
     if(c.arma)    opts.push('<span class="bdg bdg-gray">ARMA</span>');
     if(c.credit)  opts.push('<span class="bdg bdg-gray">Credit</span>');
     if(c.promised)opts.push('<span class="bdg bdg-gray">Prom.</span>');
+    if(c.cols)    opts.push('<span class="bdg bdg-blue" title="Custom columns: '+esc(c.cols.replace(/\|/g,', '))+'">Custom cols</span>');
 
     return '<tr>'
       +'<td><span class="bdg bdg-gray">'+esc(c.custno||'—')+'</span></td>'
@@ -683,6 +710,7 @@ function downloadCustomersExcel() {
       'Include ARMA':     c.arma?'Y':'N',
       'Include Credit':   c.credit?'Y':'N',
       'Promised Date':    c.promised?'Y':'N',
+      'Statement Columns':c.cols||'',
       'Schedule':         c.schedule,
       'Schedule Time':    c.schedtime||''
     };
@@ -784,7 +812,59 @@ function renderColGrid() {
   }
 }
 
-// ── RENDER: SCHEDULE LIST ────────────────────────────────
+// ── RENDER: PER-CUSTOMER COLUMN PICKER (in modal) ────────
+// CSS_ST.modalCols = [] means "use global default" (inherit).
+// When the user ticks any column the array is explicitly set.
+// "Reset to global default" clears the array back to [].
+function renderModalColGrid() {
+  var el = G('m-col-grid'); if(!el) return;
+  // Determine the effective list to show as "active" (for visual reference only)
+  var effective = CSS_ST.modalCols.length ? CSS_ST.modalCols
+    : (CSS_ST.selectedCols.length ? CSS_ST.selectedCols : DEFAULT_COLS);
+  var using = CSS_ST.modalCols.length ? 'custom' : 'global';
+  // Update badge
+  var badge = G('m-col-badge');
+  if(badge) {
+    badge.textContent = using === 'custom'
+      ? CSS_ST.modalCols.length + ' columns (custom)'
+      : 'Using global default (' + effective.length + ' columns)';
+    badge.style.background = using === 'custom' ? 'var(--blue-l)' : '#f3f4f6';
+    badge.style.color      = using === 'custom' ? 'var(--blue)'   : 'var(--gray)';
+    badge.style.border     = using === 'custom' ? '1px solid var(--blue-b)' : '1px solid var(--border)';
+  }
+  el.innerHTML = ALL_COLS.map(function(c) {
+    var sel = CSS_ST.modalCols.length ? (CSS_ST.modalCols.indexOf(c) > -1) : (effective.indexOf(c) > -1);
+    var isDefault = using === 'global';
+    return '<div class="col-item m-col-item'+(sel?' sel':'')+(isDefault?' m-col-inherited':'')+'" data-mcol="'+esc(c)+'" title="'+esc(c)+'">'
+      +'<span class="chk">'+(sel?'✓':'·')+'</span> '+esc(c)
+      +'</div>';
+  }).join('');
+
+  if(!el._mColWired) {
+    el._mColWired = true;
+    el.addEventListener('click', function(e){
+      var item = e.target;
+      while(item && item !== el){
+        if(item.classList && item.classList.contains('m-col-item')) break;
+        item = item.parentNode;
+      }
+      if(!item || item === el) return;
+      var c = item.getAttribute('data-mcol'); if(!c) return;
+      // First click switches from inherited → explicit copy of effective list
+      if(!CSS_ST.modalCols.length) {
+        CSS_ST.modalCols = CSS_ST.selectedCols.length
+          ? CSS_ST.selectedCols.slice()
+          : DEFAULT_COLS.slice();
+      }
+      var idx = CSS_ST.modalCols.indexOf(c);
+      if(idx > -1) CSS_ST.modalCols.splice(idx, 1);
+      else CSS_ST.modalCols.push(c);
+      renderModalColGrid();
+    });
+  }
+}
+
+
 function renderScheduleList() {
   var el=G('sched-list'); if(!el) return;
   if(!CSS_ST.customers.length) { el.innerHTML='<div class="empty">No customers loaded yet.</div>'; return; }
@@ -953,7 +1033,7 @@ function filterAgingForCustomer(cust) {
 }
 
 function renderCustomerPanel(cust, filtered) {
-  var cols=CSS_ST.selectedCols.length?CSS_ST.selectedCols:DEFAULT_COLS;
+  var cols=getColsForCustomer(cust);
   var SUM_COLS=['Inv Balance'];
   var NUM_COLS=['Current','Over Due  1','Over Due 31','Over Due 61','Over Due 91','Over Due 121','Inv Balance'];
   var total=0; filtered.forEach(function(r){ total+=parseNum(getRowVal(r,'Inv Balance','InvBalance')); });
@@ -1055,7 +1135,7 @@ function wirePreviewPanelToggles() {
 }
 
 function buildStatementHTML(cust, filtered) {
-  var cols=CSS_ST.selectedCols.length?CSS_ST.selectedCols:DEFAULT_COLS;
+  var cols=getColsForCustomer(cust);
   var NUM_COLS=['Current','Over Due  1','Over Due 31','Over Due 61','Over Due 91','Over Due 121','Inv Balance'];
   var nos = getConsolidatedCustNos(cust);
   var isConsolidated = nos.length > 1;
@@ -1191,67 +1271,99 @@ var GRAPH_TOKEN     = null;
 var GRAPH_TOKEN_EXP = 0;
 var GRAPH_USER      = {};
 
-function graphGetToken() {
-  if(GRAPH_TOKEN && Date.now() < GRAPH_TOKEN_EXP - 300000) return Promise.resolve(GRAPH_TOKEN);
+// ── Real registered Azure AD app — NVIDIA tenant ────────────────────────────
+var AAD_CLIENT_ID = 'b913a89d-c498-4c89-af32-b80ea1d6294a';
+var AAD_TENANT_ID = '43083d15-7273-40c1-b7db-39efd9ccc17a';
+var GRAPH_SCOPES  = ['Mail.Send','Mail.ReadWrite','User.Read'];
 
-  // Try multiple approaches in order:
-  // 1. SP.OAuth.Token/Acquire with form-encoded body (correct format)
-  // 2. SP.OAuth.Token/Acquire with resource as query param
-  // 3. _api/SP.AppContextSite token endpoint
-  // 4. ADAL token from window context if available
+function getRedirectUri() {
+  return 'https://nvidia.sharepoint.com/_layouts/15/blank.aspx';
+}
 
-  // Check if SharePoint ADAL token is available in page context
-  if(window._spPageContextInfo && window._spPageContextInfo.aadTokenProviderFactory) {
-    try {
-      var factory = window._spPageContextInfo.aadTokenProviderFactory;
-      if(factory && factory.getTokenProvider) {
-        return factory.getTokenProvider().then(function(provider){
-          return provider.getToken('https://graph.microsoft.com');
-        }).then(function(token){
-          GRAPH_TOKEN = token;
-          GRAPH_TOKEN_EXP = Date.now() + 3000000;
-          return GRAPH_TOKEN;
-        });
-      }
-    } catch(e) {}
-  }
-
-  // Try SP.OAuth.Token/Acquire with form-encoded body
-  var url = spOrigin() + SP_BASE + '/_api/SP.OAuth.Token/Acquire';
-  return getDigest().then(function(digest){
-    return fetch(url, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Accept': 'application/json;odata=verbose',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'X-RequestDigest': digest
-      },
-      body: 'resource=https%3A%2F%2Fgraph.microsoft.com'
-    }).then(function(res){
-      if(res.ok) return res.json();
-      // Try alternate: resource as query param with empty body
-      return fetch(url+'?resource='+encodeURIComponent('https://graph.microsoft.com'), {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Accept': 'application/json;odata=verbose',
-          'Content-Type': 'application/json;odata=verbose',
-          'X-RequestDigest': digest,
-          'Content-Length': '0'
-        }
-      }).then(function(r){
-        if(!r.ok) throw new Error('SP OAuth HTTP '+r.status);
-        return r.json();
-      });
+function generatePKCE() {
+  var array = new Uint8Array(32);
+  window.crypto.getRandomValues(array);
+  var verifier = btoa(String.fromCharCode.apply(null, array))
+    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+  return window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
+    .then(function(hash){
+      var challenge = btoa(String.fromCharCode.apply(null, new Uint8Array(hash)))
+        .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+      return { verifier:verifier, challenge:challenge };
     });
-  }).then(function(data){
-    var token = data && data.d && data.d.BearerToken;
-    if(!token) throw new Error('SP OAuth: no token returned — site may block delegated Graph access');
-    GRAPH_TOKEN     = token;
-    GRAPH_TOKEN_EXP = Date.now() + 3500000;
+}
+
+function exchangeCodeForToken(code, verifier) {
+  var body = 'grant_type=authorization_code'
+    +'&client_id='+encodeURIComponent(AAD_CLIENT_ID)
+    +'&code='+encodeURIComponent(code)
+    +'&redirect_uri='+encodeURIComponent(getRedirectUri())
+    +'&code_verifier='+encodeURIComponent(verifier)
+    +'&scope='+encodeURIComponent(GRAPH_SCOPES.join(' '));
+  return fetch('https://login.microsoftonline.com/'+AAD_TENANT_ID+'/oauth2/v2.0/token',{
+    method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:body
+  }).then(function(r){return r.json();})
+  .then(function(data){
+    if(data.error) throw new Error(data.error_description||data.error);
+    GRAPH_TOKEN     = data.access_token;
+    GRAPH_TOKEN_EXP = Date.now()+(data.expires_in||3600)*1000;
+    if(data.id_token){
+      try{
+        var p=JSON.parse(atob(data.id_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+        GRAPH_USER={displayName:p.name||p.preferred_username||'',mail:p.preferred_username||''};
+      }catch(e){}
+    }
     return GRAPH_TOKEN;
   });
+}
+
+function graphGetTokenViaPopup() {
+  return generatePKCE().then(function(pkce){
+    return new Promise(function(resolve,reject){
+      var authUrl='https://login.microsoftonline.com/'+AAD_TENANT_ID+'/oauth2/v2.0/authorize'
+        +'?client_id='+encodeURIComponent(AAD_CLIENT_ID)
+        +'&response_type=code'
+        +'&redirect_uri='+encodeURIComponent(getRedirectUri())
+        +'&scope='+encodeURIComponent(GRAPH_SCOPES.join(' '))
+        +'&response_mode=query'
+        +'&code_challenge='+encodeURIComponent(pkce.challenge)
+        +'&code_challenge_method=S256'
+        +'&prompt=select_account';
+
+      var popup=window.open(authUrl,'GraphAuth',
+        'width=520,height=640,left='+(screen.width/2-260)+',top='+(screen.height/2-320));
+
+      if(!popup){reject(new Error('Popup blocked — allow popups for this site.')); return;}
+
+      var poll=setInterval(function(){
+        try{
+          if(popup.closed){clearInterval(poll);reject(new Error('Login window closed.'));return;}
+          var href=popup.location.href||'';
+          if(href.indexOf('blank.aspx')>-1||href.indexOf('code=')>-1){
+            clearInterval(poll);
+            var search=popup.location.search||'';
+            popup.close();
+            var params={};
+            search.replace(/^\?/,'').split('&').forEach(function(p){
+              var kv=p.split('=');if(kv[0])params[decodeURIComponent(kv[0])]=decodeURIComponent(kv[1]||'');
+            });
+            if(params.error){reject(new Error(params.error_description||params.error));return;}
+            if(!params.code){reject(new Error('No auth code in redirect'));return;}
+            exchangeCodeForToken(params.code,pkce.verifier).then(resolve).catch(reject);
+          }
+        }catch(e){}
+      },600);
+      setTimeout(function(){clearInterval(poll);if(!popup.closed)popup.close();reject(new Error('Login timed out.'));},180000);
+    });
+  });
+}
+
+function graphGetToken() {
+  if(GRAPH_TOKEN && Date.now() < GRAPH_TOKEN_EXP - 300000) return Promise.resolve(GRAPH_TOKEN);
+  // Primary: PKCE auth code flow via popup (uses registered app b913a89d...)
+  return graphGetTokenViaPopup();
 }
 
 function graphGetMe() {
@@ -1303,6 +1415,77 @@ function showGraphConnected(me) {
 // ── POWER AUTOMATE HTTP TRIGGER ──────────────────────────────────────────────
 var PA_TRIGGER_URL = 'https://default43083d15727340c1b7db39efd9ccc1.7a.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/d408235839a7419cab763c1ca9272514/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=GeDlqzY-Rneaq-Wbeq8a41GxSJ7T9pU_7b9OYREoeD4';
 
+// Build the full pre-rendered payload for one customer.
+// PA receives a ready-to-send package: to/cc/subject/body (HTML) + Excel as base64.
+// The flow just loops and calls Send Email — no column logic needed in PA.
+function buildPACustomerPayload(cust) {
+  var today     = new Date().toISOString().split('T')[0];
+  var todayFmt  = new Date().toLocaleDateString();
+  var filtered  = filterAgingForCustomer(cust);
+  var total     = 0;
+  filtered.forEach(function(r){ total += parseNum(getRowVal(r,'Inv Balance','InvBalance')); });
+
+  var collector = cust.collector || (cust.cc && cust.cc[0]) || '';
+  var tplSubj   = ((G('tpl-subject')||{}).value||'Account Statement - {CustomerName} - {Date}').trim();
+  var tplBody   = ((G('tpl-body')||{}).value||'Dear {CustomerName},\n\nPlease find attached your account statement as of {Date}.\n\nBest regards,\nNVIDIA AR Collections').trim();
+
+  var subject = tplSubj
+    .replace(/{CustomerName}/g, cust.name)
+    .replace(/{Date}/g, todayFmt)
+    .replace(/{Collector}/g, collector);
+  var bodyText = tplBody
+    .replace(/{CustomerName}/g, cust.name)
+    .replace(/{Date}/g, todayFmt)
+    .replace(/{Collector}/g, collector);
+
+  // Build HTML statement body (same function used by EML / Graph sends)
+  var htmlBody = buildStatementHTML(cust, filtered);
+
+  // Build CSV — plain text sent as-is in the payload (no base64).
+  // PA will base64() it internally before passing to ContentBytes.
+  var cols    = getColsForCustomer(cust);
+  var csvRows = [cols.join(',')];   // header row
+  filtered.forEach(function(r){
+    var row = cols.map(function(c){
+      var key = COL_KEY_MAP[c]||c;
+      var val = getRowVal(r,c,key);
+      if(val === null || val === undefined) val = '';
+      var s = String(val);
+      if(s.indexOf(',') > -1 || s.indexOf('"') > -1 || s.indexOf('\n') > -1) {
+        s = '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    });
+    csvRows.push(row.join(','));
+  });
+  var csvContent = csvRows.join('\r\n');
+  var csvFname   = 'Statement_' + cust.custno + '_' + today + '.csv';
+
+  var toArr = (cust.to || []).filter(function(e){ return e && e.trim(); });
+  var ccArr = (cust.cc || []).filter(function(e){ return e && e.trim(); });
+  if(collector && collector.trim() && ccArr.indexOf(collector.trim()) === -1) ccArr.push(collector.trim());
+
+  return {
+    custno:    cust.custno,
+    name:      cust.name,
+    to:        toArr,
+    cc:        ccArr,
+    collector: collector,
+    rowCount:  filtered.length,
+    totalBal:  total,
+    cols:      cols,
+    email: {
+      subject:  subject,
+      bodyText: bodyText,
+      bodyHtml: htmlBody,
+      attachments: [{
+        name:    csvFname,
+        csvData: csvContent   // plain text — PA uses base64() expression on this
+      }]
+    }
+  };
+}
+
 function runViaPowerAutomate() {
   var custs = getSelectedCustomers();
   if(!custs.length){ alert('Select at least one customer first.'); return; }
@@ -1313,49 +1496,79 @@ function runViaPowerAutomate() {
   if(!url){ showErr('Power Automate URL is not configured.'); return; }
 
   var progDiv = G('send-progress'); if(progDiv) progDiv.style.display='';
-  var progBar = G('send-prog-bar');  if(progBar) progBar.style.width='30%';
-  var progTxt = G('send-prog-text'); if(progTxt) progTxt.textContent='Calling Power Automate...';
-  var results = G('send-results');   if(results) results.innerHTML='';
+  var progBar = G('send-prog-bar');
+  var progTxt = G('send-prog-text');
+  var results = G('send-results');  if(results) results.innerHTML='';
 
-  var custNos = custs.map(function(c){ return c.custno; });
-  var payload = {
-    triggeredBy: 'CustomerStatementSetup',
-    triggerTime: new Date().toISOString(),
-    customers: custs.map(function(c){
-      var filtered = filterAgingForCustomer(c);
-      var total = 0;
-      filtered.forEach(function(r){ total += parseNum(getRowVal(r,'Inv Balance','InvBalance')); });
-      return { custno:c.custno, name:c.name, to:c.to, cc:c.cc,
-               collector:c.collector, schedule:c.schedule,
-               rowCount:filtered.length, totalBal:total };
-    }),
-    selectedCustNos: custNos
-  };
+  // Build payloads — this may take a moment for large customer counts
+  if(progBar) progBar.style.width='20%';
+  if(progTxt) progTxt.textContent='Building statements (' + custs.length + ' customer(s))...';
 
-  fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  }).then(function(res){
-    if(progBar) progBar.style.width='100%';
-    if(res.status===200||res.status===202||res.status===204){
-      if(progTxt) progTxt.textContent='Power Automate triggered successfully!';
-      if(results) results.innerHTML=
-        '<div style="background:var(--green-l);border:1px solid var(--green-b);border-radius:7px;padding:10px 14px;font-size:13px;color:var(--green)">'
-          +'&#10003; <strong>Flow triggered</strong> — Power Automate will send '
-          +custs.length+' statement(s) from NVARCollection@nvidia.com.'
+  // Use setTimeout to allow the UI to repaint before heavy work
+  setTimeout(function() {
+    var customerPayloads;
+    try {
+      customerPayloads = custs.map(buildPACustomerPayload);
+    } catch(e) {
+      if(progBar) progBar.style.width='100%';
+      if(progTxt) progTxt.textContent='Error building statements';
+      if(results) results.innerHTML =
+        '<div style="background:var(--red-l);border:1px solid var(--red-b);border-radius:7px;padding:10px 14px;font-size:13px;color:var(--red)">'
+          +'&#10007; Failed to build statements: '+esc(e.message)
         +'</div>';
-    } else {
-      return res.text().then(function(t){ throw new Error('HTTP '+res.status+': '+t.slice(0,200)); });
+      return;
     }
-  }).catch(function(err){
-    if(progBar) progBar.style.width='100%';
-    if(progTxt) progTxt.textContent='Error';
-    if(results) results.innerHTML=
-      '<div style="background:var(--red-l);border:1px solid var(--red-b);border-radius:7px;padding:10px 14px;font-size:13px;color:var(--red)">'
-        +'&#10007; PA trigger failed: '+esc(err.message)
-      +'</div>';
-  });
+
+    var payload = {
+      triggeredBy:  'CustomerStatementSetup',
+      triggerTime:  new Date().toISOString(),
+      statementDate: new Date().toISOString().split('T')[0],
+      customers:    customerPayloads
+    };
+
+    if(progBar) progBar.style.width='50%';
+    if(progTxt) progTxt.textContent='Sending to Power Automate...';
+
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function(res){
+      if(progBar) progBar.style.width='100%';
+      if(res.status===200||res.status===202||res.status===204){
+        if(progTxt) progTxt.textContent='Power Automate triggered successfully!';
+        // Build per-customer result cards
+        var cards = customerPayloads.map(function(p){
+          return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px">'
+            +'<span class="bdg bdg-green">&#10003;</span>'
+            +'<span style="font-weight:600">'+esc(p.name)+'</span>'
+            +'<span style="color:var(--gray)">#'+esc(p.custno)+'</span>'
+            +'<span class="bdg bdg-gray">'+p.rowCount+' rows</span>'
+            +'<span class="bdg bdg-gray">'+p.cols.length+' cols</span>'
+            +'<span style="color:var(--green);margin-left:auto">'+fmtUSD(p.totalBal)+'</span>'
+            +'</div>';
+        }).join('');
+        if(results) results.innerHTML =
+          '<div style="background:var(--green-l);border:1px solid var(--green-b);border-radius:7px;padding:10px 14px;font-size:13px;color:var(--green);margin-bottom:8px">'
+            +'&#10003; <strong>Flow triggered</strong> — Power Automate will send '
+            +custs.length+' statement(s) from NVARCollection@nvidia.com. '
+            +'Each email already has the correct columns and Excel attached.'
+          +'</div>'
+          +'<div style="border:1px solid var(--border);border-radius:7px;padding:8px 12px">'
+            +cards
+          +'</div>';
+      } else {
+        return res.text().then(function(t){ throw new Error('HTTP '+res.status+': '+t.slice(0,200)); });
+      }
+    }).catch(function(err){
+      if(progBar) progBar.style.width='100%';
+      if(progTxt) progTxt.textContent='Error';
+      if(results) results.innerHTML=
+        '<div style="background:var(--red-l);border:1px solid var(--red-b);border-radius:7px;padding:10px 14px;font-size:13px;color:var(--red)">'
+          +'&#10007; PA trigger failed: '+esc(err.message)
+        +'</div>';
+    });
+  }, 50);
 }
 
 // ── GRAPH BATCH SEND ─────────────────────────────────────────────────────────
@@ -1744,9 +1957,10 @@ function encodeQPHeader(str){
   return out;
 }
 
-// Build XLS ArrayBuffer (reused by both EML attachment and direct download)
-function buildStatementXLSBuf(cust, filtered) {
-  var cols=CSS_ST.selectedCols.length?CSS_ST.selectedCols:DEFAULT_COLS;
+// Build XLS — returns { base64, array } so callers use whichever they need.
+// SheetJS type:'base64' avoids any ArrayBuffer re-encoding issues for PA attachment.
+function buildStatementXLS(cust, filtered) {
+  var cols=getColsForCustomer(cust);
   var rows=filtered.map(function(r){
     var obj={};
     cols.forEach(function(c){
@@ -1761,7 +1975,15 @@ function buildStatementXLSBuf(cust, filtered) {
   var wb=XLSX.utils.book_new();
   var sname=String(cust.name).replace(/[:\\/\?\*\[\]]/g,'').substring(0,28)||'Statement';
   XLSX.utils.book_append_sheet(wb,ws,sname);
-  return XLSX.write(wb,{bookType:'xlsx',type:'array'});
+  return {
+    base64: XLSX.write(wb,{bookType:'xlsx',type:'base64'}),
+    array:  XLSX.write(wb,{bookType:'xlsx',type:'array'})
+  };
+}
+
+// Backward-compatible: returns array buffer (used by EML + direct download)
+function buildStatementXLSBuf(cust, filtered) {
+  return buildStatementXLS(cust, filtered).array;
 }
 
 function downloadStatementXLS(cust, filtered) {
@@ -1884,6 +2106,8 @@ function openModal(custId) {
     .forEach(function(id){ var el=G(id); if(el) el.value=''; });
   // Clear filter tags
   FILTER_FIELDS.forEach(function(f){ CSS_ST.fTags[f]=[]; renderFilterTags(f); });
+  // Reset per-customer column override
+  CSS_ST.modalCols = [];
   G('m-emailtype').value='Statement';
   G('m-arma').checked=true; G('m-credit').checked=true; G('m-promised').checked=false;
   G('m-schedule').value='None'; G('m-schedtime').value=1; // time field removed
@@ -1914,9 +2138,14 @@ function openModal(custId) {
       // time field removed
       CSS_ST.toTags = c.to.slice();
       CSS_ST.ccTags = c.cc.slice();
+      // Restore per-customer column override
+      CSS_ST.modalCols = c.cols
+        ? c.cols.split('|').map(function(v){return v.trim();}).filter(Boolean)
+        : [];
     }
   }
   renderTagWrap('to'); renderTagWrap('cc'); updateSchedHint();
+  renderModalColGrid();  // draw per-customer column picker
   // Populate aging-driven dropdowns
   populateModalDropdowns();
   if(isEdit && c) {
@@ -1975,7 +2204,8 @@ function saveModalCustomer() {
     promised:     G('m-promised').checked,
     schedule:     G('m-schedule').value,
     schedtime:    parseInt(G('m-schedtime').value,10)||1,
-    time:         '08:00'
+    time:         '08:00',
+    cols:         CSS_ST.modalCols.join('|')
   };
 
   if(CSS_ST.editingId) {
@@ -2177,6 +2407,76 @@ function updateSchedHint() {
 // saveTrigger: 'modal'|'delete'|'manual'  — shown in status message
 // modalSaveBtn: optional button to restore after save (for modal context)
 // onSuccess: optional callback after confirmed write
+// ── CHECK FILE LOCK STATUS ───────────────────────────────
+// Returns { checkedOut: bool, checkedOutBy: string, lockType: string }
+function spGetLockStatus() {
+  var url = spOrigin()+SP_BASE
+    +"/_api/web/GetFileByServerRelativePath(decodedurl='"
+    +SP_BASE+'/'+SP_FOLDER+'/'+SETUP_FILE
+    +"')?$select=CheckOutType,CheckedOutByUser/LoginName,CheckedOutByUser/Title,LockedByUser/Title&$expand=CheckedOutByUser,LockedByUser";
+  return fetch(url, {
+    headers: { 'Accept': 'application/json;odata=verbose' },
+    credentials: 'include'
+  }).then(function(r){ return r.json(); })
+  .then(function(d){
+    var f = d && d.d;
+    if(!f) return { checkedOut: false, checkedOutBy: '', lockType: 'none' };
+    // CheckOutType: 0=none, 1=online, 2=offline
+    var type = f.CheckOutType;
+    var byUser = (f.CheckedOutByUser && (f.CheckedOutByUser.Title || f.CheckedOutByUser.LoginName)) || '';
+    var locked = (f.LockedByUser && f.LockedByUser.Title) || '';
+    return {
+      checkedOut:   type > 0,
+      checkedOutBy: byUser || locked,
+      lockType:     type === 2 ? 'offline' : type === 1 ? 'online' : 'none'
+    };
+  }).catch(function(){ return { checkedOut: false, checkedOutBy: '', lockType: 'unknown' }; });
+}
+
+// ── FORCE UNLOCK ─────────────────────────────────────────
+// Called by the "Force Unlock" button in the error bar.
+// Uses SP admin override endpoint if regular UndoCheckOut fails.
+function forceUnlockAndSave() {
+  var errBar = G('err-bar');
+  if(errBar) errBar.style.display = 'none';
+  var filePath = SP_BASE+'/'+SP_FOLDER+'/'+SETUP_FILE;
+
+  function spForceOp(action) {
+    var url = spOrigin()+SP_BASE
+      +"/_api/web/GetFileByServerRelativePath(decodedurl='"+filePath+"')/"+action
+      +(action==='CheckIn' ? "(comment='Force unlock by Customer Statement Setup',checkintype=1)" : '');
+    return getDigest().then(function(digest){
+      return fetch(url, {
+        method: 'POST',
+        headers: { 'Accept':'application/json;odata=verbose', 'X-RequestDigest': digest, 'Content-Length':'0' },
+        credentials: 'include'
+      });
+    });
+  }
+
+  showOk('Forcing file unlock — please wait…');
+  var btn = G('btn-force-unlock'); if(btn){ btn.disabled=true; btn.textContent='Unlocking…'; }
+
+  // Try UndoCheckOut first (works if current user owns checkout)
+  // Then try again without checking result — SP may silently ignore if not owner
+  // Then wait for SP propagation and do direct PUT
+  spForceOp('UndoCheckOut')
+  .catch(function(){ return {ok:false}; })
+  .then(function(){
+    return new Promise(function(res){ setTimeout(res, 3000); });
+  }).then(function(){
+    // Second UndoCheckOut attempt after wait — catches cases where first was ignored
+    return spForceOp('UndoCheckOut').catch(function(){ return {ok:false}; });
+  }).then(function(){
+    return new Promise(function(res){ setTimeout(res, 2000); });
+  }).then(function(){
+    // Now attempt the save
+    pushToSharePoint('manual', null, function(){
+      if(btn){ btn.disabled=false; btn.textContent='🔓 Force Unlock & Save'; }
+    });
+  });
+}
+
 function pushToSharePoint(saveTrigger, modalSaveBtn, onSuccess) {
   if(modalSaveBtn){ modalSaveBtn.disabled=true; modalSaveBtn.textContent='Saving...'; }
   var spBtn=G('btn-save-sp');
@@ -2189,27 +2489,38 @@ function pushToSharePoint(saveTrigger, modalSaveBtn, onSuccess) {
 
   var filePath = SP_BASE+'/'+SP_FOLDER+'/'+SETUP_FILE;
 
-  // ── SP file operations ─────────────────────────────────────────────────────
   function spFileOp(action) {
-    // action: 'UndoCheckOut' | 'CheckOut' | 'CheckIn'
     var url = spOrigin()+SP_BASE
       +"/_api/web/GetFileByServerRelativePath(decodedurl='"+filePath+"')/"+action
       +(action==='CheckIn' ? "(comment='Auto-save from Customer Statement Setup',checkintype=1)" : '');
     return getDigest().then(function(digest){
       return fetch(url, {
         method: 'POST',
-        headers: { 'Accept':'application/json;odata=verbose', 'X-RequestDigest': digest,
-                   'Content-Length': '0' },
+        headers: { 'Accept':'application/json;odata=verbose', 'X-RequestDigest': digest, 'Content-Length':'0' },
         credentials: 'include'
       });
     }).catch(function(){ return {ok:false}; });
   }
 
-  // ── Main save sequence ─────────────────────────────────────────────────────
-  // 1. UndoCheckOut (silently releases any existing checkout)
-  // 2. CheckOut (gets an exclusive lock so PUT succeeds cleanly)
-  // 3. PUT file content
-  // 4. CheckIn (releases lock — file is now available to everyone)
+  function showLockError(extraMsg) {
+    resetBtns();
+    // Check who has it locked so we can show a useful message
+    spGetLockStatus().then(function(lock){
+      var who = lock.checkedOutBy ? ' Checked out by: <strong>'+esc(lock.checkedOutBy)+'</strong>.' : '';
+      var errEl = G('err-bar'); var msgEl = G('err-msg');
+      if(errEl && msgEl) {
+        msgEl.innerHTML = '🔒 File is locked in SharePoint.'+who
+          +' <button id="btn-force-unlock" class="btn btn-sm" style="background:#c81e1e;color:#fff;border:none;margin-left:10px;padding:4px 10px;cursor:pointer">🔓 Force Unlock &amp; Save</button>'
+          +(extraMsg ? '<br><small style="opacity:.8">'+esc(extraMsg)+'</small>' : '');
+        errEl.style.display = 'flex';
+        hide('ok-bar');
+        // Wire the button
+        var fb = G('btn-force-unlock');
+        if(fb) fb.addEventListener('click', forceUnlockAndSave);
+      }
+    });
+  }
+
   function doSave() {
     var buf, ab;
     try {
@@ -2220,65 +2531,52 @@ function pushToSharePoint(saveTrigger, modalSaveBtn, onSuccess) {
       showErr('Build error: '+e.message);
       return;
     }
-
     if(spBtn) spBtn.textContent='Saving…';
 
-    // Step 1: UndoCheckOut (ignore failure — file may not be checked out)
-    spFileOp('UndoCheckOut').then(function() {
-      // Step 2: CheckOut
-      return spFileOp('CheckOut');
-    }).then(function() {
-      // Step 3: PUT file content
-      return spSave(SETUP_FILE, ab);
-    }).then(function() {
-      // Step 4: CheckIn — CRITICAL — releases the lock
-      return spFileOp('CheckIn').then(function(r) {
-        if(r && !r.ok) {
-          // CheckIn failed — try once more after short delay
-          return new Promise(function(res){ setTimeout(res, 1000); })
-            .then(function(){ return spFileOp('CheckIn'); });
-        }
-      });
-    }).then(function() {
-      stamp(); resetBtns();
-      var action = saveTrigger==='delete'?'removed':saveTrigger==='modal'?'updated':'saved';
-      showOk('SharePoint updated — SetupCustomerSchedule.xlsx '+action+' successfully.');
-      if(onSuccess) onSuccess();
-    }).catch(function(err) {
-      resetBtns();
-      var msg = (err && err.message) || String(err);
-      if(msg.indexOf('423')>-1) {
-        // Still locked — force undo then retry entire sequence once
-        showOk('File locked — forcing release and retrying...');
-        spFileOp('UndoCheckOut').then(function(){
-          return new Promise(function(res){ setTimeout(res, 2000); });
-        }).then(function(){
-          return spFileOp('CheckOut');
-        }).then(function(){
-          var buf2 = buildSetupXlsx();
-          return spSave(SETUP_FILE, new Uint8Array(buf2).buffer);
-        }).then(function(){
-          return spFileOp('CheckIn');
-        }).then(function(){
-          stamp(); resetBtns();
-          showOk('SharePoint updated after releasing file lock.');
-          if(onSuccess) onSuccess();
-        }).catch(function(err2){
-          resetBtns();
-          // Last resort — try UndoCheckOut so at least file is not stuck
-          spFileOp('UndoCheckOut').catch(function(){});
-          showErr('Save failed: '+((err2&&err2.message)||String(err2))+
-            '. Please close the file in Excel and try again.');
-        });
-      } else {
-        // Non-lock error — still try to check in / undo to not leave file stuck
-        spFileOp('CheckIn').catch(function(){ spFileOp('UndoCheckOut').catch(function(){}); });
-        showErr('SharePoint write failed: '+msg);
+    // ── Attempt 1: direct PUT ──────────────────────────────────────────────
+    spSave(SETUP_FILE, ab).then(function(res) {
+      if(res.ok) {
+        stamp(); resetBtns();
+        var action = saveTrigger==='delete'?'removed':saveTrigger==='modal'?'updated':'saved';
+        showOk('SharePoint updated — SetupCustomerSchedule.xlsx '+action+' successfully.');
+        if(onSuccess) onSuccess();
+        return;
       }
+      throw new Error('HTTP '+res.status);
+    }).catch(function(err) {
+      var msg = (err && err.message) || String(err);
+      var is423 = msg.indexOf('423') > -1 || msg.indexOf('locked') > -1 || msg.indexOf('checked') > -1;
+      if(!is423) {
+        resetBtns();
+        showErr('SharePoint write failed: '+msg);
+        return;
+      }
+
+      // ── Attempt 2: UndoCheckOut → wait → PUT directly (skip CheckOut/CheckIn) ──
+      // Most SP Online locks are co-authoring locks (not checkout locks).
+      // UndoCheckOut releases checkout locks; co-authoring locks expire on their own.
+      showOk('File locked — releasing checkout and retrying…');
+      spFileOp('UndoCheckOut').then(function(){
+        return new Promise(function(res){ setTimeout(res, 3000); });
+      }).then(function(){
+        var buf2 = buildSetupXlsx();
+        return spSave(SETUP_FILE, new Uint8Array(buf2).buffer);
+      }).then(function(res2){
+        if(res2.ok) {
+          stamp(); resetBtns();
+          var action = saveTrigger==='delete'?'removed':saveTrigger==='modal'?'updated':'saved';
+          showOk('SharePoint updated — SetupCustomerSchedule.xlsx '+action+' successfully.');
+          if(onSuccess) onSuccess();
+        } else {
+          showLockError('HTTP '+res2.status+' on retry');
+        }
+      }).catch(function(err2){
+        showLockError((err2&&err2.message)||String(err2));
+      });
     });
   }
 
-  // Always start with UndoCheckOut to clear any stale lock, then save
+  // Pre-flight: release any stale checkout owned by current user, then save
   spFileOp('UndoCheckOut').then(doSave).catch(doSave);
 }
 
@@ -2335,101 +2633,22 @@ function exportPowerAutomate() {
           "value": "@{formatDateTime(utcNow(),'yyyy-MM-dd')}" }] },
         "runAfter": {}
       },
-      "Initialize_DayOfWeek": {
-        "type": "InitializeVariable",
-        "inputs": { "variables": [{ "name": "DayOfWeek", "type": "integer",
-          "value": "@dayOfWeek(utcNow())" }] },
-        "runAfter": { "Initialize_TodayDate": ["Succeeded"] }
-      },
-      "Initialize_DayOfMonth": {
-        "type": "InitializeVariable",
-        "inputs": { "variables": [{ "name": "DayOfMonth", "type": "integer",
-          "value": "@dayOfMonth(utcNow())" }] },
-        "runAfter": { "Initialize_DayOfWeek": ["Succeeded"] }
-      },
       "Initialize_SentCount": {
         "type": "InitializeVariable",
         "inputs": { "variables": [{ "name": "SentCount", "type": "integer", "value": 0 }] },
-        "runAfter": { "Initialize_DayOfMonth": ["Succeeded"] }
-      },
-      "Initialize_ShouldSend": {
-        "type": "InitializeVariable",
-        "inputs": { "variables": [{ "name": "ShouldSend", "type": "boolean", "value": false }] },
-        "runAfter": { "Initialize_SentCount": ["Succeeded"] }
-      },
-      "Initialize_FilteredRows": {
-        "type": "InitializeVariable",
-        "inputs": { "variables": [{ "name": "FilteredRows", "type": "array", "value": [] }] },
-        "runAfter": { "Initialize_ShouldSend": ["Succeeded"] }
-      },
-      "Get_Aging_Rows": {
-        "type": "ApiConnection",
-        "inputs": {
-          "host": { "connection": { "name": "@parameters('$connections')['sharepointonline']['connectionId']" } },
-          "method": "get",
-          "path": "/datasets/@{encodeURIComponent(encodeURIComponent('"+spSite+"'))}/tables/@{encodeURIComponent(encodeURIComponent('"+spFile+AGING_FILE+"'))}/items",
-          "queries": { "$top": 100000 }
-        },
-        "runAfter": { "Initialize_FilteredRows": ["Succeeded"] }
+        "runAfter": { "Initialize_TodayDate": ["Succeeded"] }
       },
       "For_Each_Customer": {
         "type": "Foreach",
-        "foreach": "@variables('CustomerList')",
+        "foreach": "@triggerBody()?['customers']",
         "runtimeConfiguration": { "concurrency": { "repetitions": 1 } },
-        "runAfter": { "Get_Aging_Rows": ["Succeeded"] },
+        "runAfter": { "Initialize_SentCount": ["Succeeded"] },
         "actions": {
-          "Check_Schedule": {
-            "type": "Switch",
-            "expression": "@items('For_Each_Customer')?['schedule']?['frequency']",
-            "cases": {
-              "Daily": { "case": "Daily", "actions": {
-                "Set_Daily": { "type": "SetVariable", "inputs": { "name": "ShouldSend",
-                  "value": "@and(greaterOrEquals(variables('DayOfWeek'),1),lessOrEquals(variables('DayOfWeek'),5))" }}
-              }},
-              "Weekly": { "case": "Weekly", "actions": {
-                "Set_Weekly": { "type": "SetVariable", "inputs": { "name": "ShouldSend",
-                  "value": "@equals(variables('DayOfWeek'),int(items('For_Each_Customer')?['schedule']?['day']))" }}
-              }},
-              "Monthly": { "case": "Monthly", "actions": {
-                "Set_Monthly": { "type": "SetVariable", "inputs": { "name": "ShouldSend",
-                  "value": "@equals(variables('DayOfMonth'),int(items('For_Each_Customer')?['schedule']?['day']))" }}
-              }}
-            },
-            "default": { "actions": { "Set_Default": { "type": "SetVariable",
-              "inputs": { "name": "ShouldSend", "value": false }}}},
-            "runAfter": {}
-          },
-          "If_ShouldSend": {
-            "type": "If",
-            "expression": { "equals": ["@variables('ShouldSend')", true] },
-            "runAfter": { "Check_Schedule": ["Succeeded"] },
-            "actions": {
-              "Filter_By_CustNo": {
-                "type": "Query",
-                "inputs": { "from": "@body('Get_Aging_Rows')?['value']",
-                  "where": "@equals(string(item()?['Cust No.']),string(items('For_Each_Customer')?['custno']))" }
-              },
-              "Set_Filtered": { "type": "SetVariable",
-                "inputs": { "name": "FilteredRows", "value": "@body('Filter_By_CustNo')" },
-                "runAfter": { "Filter_By_CustNo": ["Succeeded"] }
-              },
               "If_Has_Rows": {
                 "type": "If",
-                "expression": { "greater": ["@length(variables('FilteredRows'))", 0] },
-                "runAfter": { "Set_Filtered": ["Succeeded"] },
+                "expression": { "greater": ["@items('For_Each_Customer')?['rowCount']", 0] },
+                "runAfter": {},
                 "actions": {
-                  "Build_Table_Rows": {
-                    "type": "Select",
-                    "inputs": {
-                      "from": "@variables('FilteredRows')",
-                      "select": "@concat('<tr><td>',item()?['SO Number'],'</td><td>',item()?['Invoice'],'</td><td>',item()?['Customer PO'],'</td><td>',item()?['Inv Date'],'</td><td>',item()?['Due Date'],'</td><td>',item()?['Terms'],'</td><td style=\"text-align:right\">',item()?['Current'],'</td><td style=\"text-align:right\">',item()?['Over Due  1'],'</td><td style=\"text-align:right\">',item()?['Over Due 31'],'</td><td style=\"text-align:right\">',item()?['Over Due 61'],'</td><td style=\"text-align:right\">',item()?['Over Due 91'],'</td><td style=\"text-align:right\">',item()?['Over Due 121'],'</td><td style=\"text-align:right;font-weight:600\">',item()?['Inv Balance'],'</td><td>',item()?['Comments'],'</td></tr>')"
-                    }
-                  },
-                  "Compose_Email_HTML": {
-                    "type": "Compose",
-                    "inputs": "@concat('<html><head><style>body{font-family:Arial,sans-serif;font-size:12px}table{width:100%;border-collapse:collapse}th{background:#1a56db;color:#fff;padding:7px 9px;font-size:11px;white-space:nowrap;text-align:left}th.r{text-align:right}td{padding:6px 9px;border-bottom:1px solid #e5e7eb;font-size:11px}tr:nth-child(even) td{background:#f9fafb}</style></head><body><div style=\"background:#1a56db;color:#fff;padding:14px 18px;margin-bottom:16px\"><strong style=\"font-size:15px\">Account Statement — ',items('For_Each_Customer')?['name'],'</strong><div style=\"font-size:11px;opacity:.85;margin-top:4px\">Cust No: ',items('For_Each_Customer')?['custno'],' | Date: ',variables('TodayDate'),' | Collector: ',items('For_Each_Customer')?['collector'],'</div></div><table><thead><tr><th>SO Number</th><th>Invoice</th><th>Customer PO</th><th>Inv Date</th><th>Due Date</th><th>Terms</th><th class=\"r\">Current</th><th class=\"r\">OD 1</th><th class=\"r\">OD 31</th><th class=\"r\">OD 61</th><th class=\"r\">OD 91</th><th class=\"r\">OD 121</th><th class=\"r\">Inv Balance</th><th>Comments</th></tr></thead><tbody>',join(body('Build_Table_Rows'),''),'</tbody></table><p style=\"font-size:11px;color:#6b7280;margin-top:16px\">Automated statement from NVIDIA AR Collections. Contact ',items('For_Each_Customer')?['collector'],' with queries.</p></body></html>')",
-                    "runAfter": { "Build_Table_Rows": ["Succeeded"] }
-                  },
                   "Send_Statement_Email": {
                     "type": "ApiConnection",
                     "inputs": {
@@ -2440,13 +2659,20 @@ function exportPowerAutomate() {
                         "From": "NVARCollection@nvidia.com",
                         "To": "@{join(items('For_Each_Customer')?['to'],';')}",
                         "Cc": "@{join(items('For_Each_Customer')?['cc'],';')}",
-                        "Subject": "@concat('Account Statement — ',items('For_Each_Customer')?['name'],' — ',variables('TodayDate'))",
-                        "Body": "@{outputs('Compose_Email_HTML')}",
+                        "Subject": "@{items('For_Each_Customer')?['email']?['subject']}",
+                        "Body": "@{replace(items('For_Each_Customer')?['email']?['bodyText'], '\n', '<br>')}",
                         "Importance": "Normal",
-                        "IsHtml": true
+                        "IsHtml": true,
+                        "Attachments": [
+                          {
+                            "Name": "@{items('For_Each_Customer')?['email']?['attachments']?[0]?['name']}",
+                            "ContentBytes": "@{items('For_Each_Customer')?['email']?['attachments']?[0]?['data']}",
+                            "ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                          }
+                        ]
                       }
                     },
-                    "runAfter": { "Compose_Email_HTML": ["Succeeded"] }
+                    "runAfter": {}
                   },
                   "Increment_Sent": { "type": "IncrementVariable",
                     "inputs": { "name": "SentCount", "value": 1 },
@@ -2456,10 +2682,6 @@ function exportPowerAutomate() {
                 "else": { "actions": { "Log_No_Items": { "type": "Compose",
                   "inputs": "@concat('SKIP no open items: ',items('For_Each_Customer')?['name'])" }}}
               }
-            },
-            "else": { "actions": { "Log_Not_Today": { "type": "Compose",
-              "inputs": "@concat('SKIP not scheduled today: ',items('For_Each_Customer')?['name'],' (',items('For_Each_Customer')?['schedule']?['frequency'],')')" }}}
-          }
         }
       },
       "Send_Daily_Summary": {
@@ -2483,26 +2705,9 @@ function exportPowerAutomate() {
 
   // Embed the current customer list as a variable initialisation step
   // so the flow uses the same config as the setup page
-  var custList = CSS_ST.customers.map(function(c) {
-    return {
-      custno: c.custno, name: c.name,
-      to: c.to, cc: c.cc,
-      collector: c.collector, emailtype: c.emailtype,
-      schedule: { frequency: c.schedule, day: c.schedtime, time: c.time },
-      filters: { arma: c.arma, credit: c.credit, promised: c.promised,
-                 endcust: c.endcust, bu: c.bu, cocode: c.cocode,
-                 material: c.material, type: c.type, consolidated: c.consolidated }
-    };
-  });
-  // Insert as an Initialize_CustomerList action before For_Each_Customer
-  flow.actions['Initialize_CustomerList'] = {
-    "type": "InitializeVariable",
-    "inputs": { "variables": [{ "name": "CustomerList", "type": "array",
-      "value": custList }] },
-    "runAfter": { "Initialize_FilteredRows": ["Succeeded"] }
-  };
-  // Fix For_Each_Customer to run after CustomerList is ready
-  flow.actions['Get_Aging_Rows'].runAfter = { "Initialize_CustomerList": ["Succeeded"] };
+  // The HTTP-triggered flow reads customers directly from triggerBody()?['customers']
+  // (pre-built by the browser with filtered rows, correct columns, and Excel attachment).
+  // No CustomerList initialisation or aging re-read is needed.
 
   var json = JSON.stringify(flow, null, 2);
   var blob = new Blob([json], {type:'application/json'});
@@ -2705,6 +2910,25 @@ function wireEvents() {
   if(saveBtn)   saveBtn.addEventListener('click', saveModalCustomer);
   if(overlay)   overlay.addEventListener('click', function(e){ if(e.target===overlay) closeModal(); });
 
+  // Modal column picker controls
+  var btnMColReset = G('btn-mcol-reset');
+  var btnMColAll   = G('btn-mcol-all');
+  var btnMColNone  = G('btn-mcol-none');
+  if(btnMColReset) btnMColReset.addEventListener('click', function(){
+    CSS_ST.modalCols = []; renderModalColGrid();
+  });
+  if(btnMColAll) btnMColAll.addEventListener('click', function(){
+    CSS_ST.modalCols = ALL_COLS.slice(); renderModalColGrid();
+  });
+  if(btnMColNone) btnMColNone.addEventListener('click', function(){
+    CSS_ST.modalCols = []; renderModalColGrid();
+    // After clearing, user may want explicit empty — treat as "use only empty"
+    // but an empty array means "inherit", so give them at least a hint:
+    // Actually keep empty = inherit (user should use Reset for that). So set to a sentinel.
+    // Design decision: [] = inherit global; to explicitly send 0 cols would break statements.
+    // "Clear all" here means: revert to inherited global (same as Reset).
+  });
+
   // Tag inputs
   function wireTag(inputId, type) {
     var inp=G(inputId); if(!inp) return;
@@ -2873,7 +3097,9 @@ function wireEvents() {
   // Save / export buttons
   var btnSaveSP=G('btn-save-sp'), btnDlXl=G('btn-download-xl');
   var btnExPa=G('btn-export-pa'), btnExPy=G('btn-export-py');
-  if(btnSaveSP) btnSaveSP.addEventListener('click', saveToSharePoint);
+  var btnForceUnlock=G('btn-force-unlock-main');
+  if(btnSaveSP)      btnSaveSP.addEventListener('click', saveToSharePoint);
+  if(btnForceUnlock) btnForceUnlock.addEventListener('click', forceUnlockAndSave);
   if(btnDlXl)   btnDlXl.addEventListener('click',   downloadSetupExcel);
   if(btnExPa)   btnExPa.addEventListener('click',   exportPowerAutomate);
   if(btnExPy)   btnExPy.addEventListener('click',   exportPython);
