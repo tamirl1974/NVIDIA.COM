@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Customer Statement Setup</title>
+<script src="/sites/ARCollection/SiteAssets/xlsx.full.min.js"></script>
+<script src="/sites/ARCollection/SiteAssets/exceljs.min.JS"></script>
+<script src="/sites/ARCollection/SiteAssets/CustomerStatementSetup.JS"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f0f2f5;color:#111827;font-size:14px}
+:root{
+  --blue:#1a56db;--blue-l:#ebf5ff;--blue-b:#93c5fd;
+  --green:#057a55;--green-l:#def7ec;--green-b:#a7f3d0;
+  --red:#c81e1e;--red-l:#fde8e8;--red-b:#fca5a5;
+  --amber:#b45309;--amber-l:#fffbeb;--amber-b:#fcd34d;
+  --gray:#6b7280;--border:#e5e7eb;--white:#fff;
+  --r:10px;--sh:0 1px 4px rgba(0,0,0,.08)
+}
+#app{max-width:1200px;margin:0 auto;padding:16px}
+
+/* ── HEADER ── */
+.hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px}
+.hdr-l{display:flex;align-items:center;gap:10px}
+.logo{width:34px;height:34px;background:var(--blue);border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px;flex-shrink:0}
+h1{font-size:19px;font-weight:700;color:#111}
+.badge{font-size:11px;padding:2px 9px;border-radius:20px;font-weight:500;border:1px solid transparent}
+.b-live{background:var(--green-l);color:var(--green);border-color:var(--green-b)}
+
+/* ── SOURCE BAR ── */
+.src-bar{background:var(--white);border:1px solid var(--border);border-radius:8px;padding:7px 14px;margin-bottom:12px;font-size:11px;color:var(--gray);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.src-bar code{background:#f3f4f6;padding:1px 5px;border-radius:3px;font-size:10px;color:#374151}
+
+/* ── BUTTONS ── */
+.btn{padding:8px 16px;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;border:1px solid transparent;transition:opacity .15s;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{opacity:.85}.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-primary{background:var(--blue);color:#fff}
+.btn-outline{background:var(--white);color:#374151;border-color:var(--border)}
+.btn-danger{background:var(--red-l);color:var(--red);border-color:var(--red-b)}
+.btn-sm{padding:5px 11px;font-size:12px;border-radius:6px}
+.btn-green{background:var(--green-l);color:var(--green);border:1px solid var(--green-b);padding:5px 12px;font-size:12px;border-radius:6px;cursor:pointer;font-weight:500}
+.btn-green:hover{background:#d1fae5}
+
+/* ── ALERTS ── */
+.err-bar{background:var(--red-l);border:1px solid var(--red-b);border-radius:8px;padding:9px 14px;margin-bottom:12px;font-size:13px;color:var(--red);display:none;align-items:flex-start;gap:8px}
+.ok-bar{background:var(--green-l);border:1px solid var(--green-b);border-radius:8px;padding:9px 14px;margin-bottom:12px;font-size:13px;color:var(--green);display:none;align-items:center;gap:8px}
+
+/* ── TABS ── */
+.tabs{display:flex;border-bottom:2px solid var(--border);margin-bottom:14px;overflow-x:auto}
+.tab{padding:8px 16px;background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;font-size:13px;color:var(--gray);cursor:pointer;white-space:nowrap;font-weight:500;transition:color .15s}
+.tab.on{color:var(--blue);border-bottom-color:var(--blue)}.tab:hover:not(.on){color:#374151}
+
+/* ── CARDS ── */
+.card{background:var(--white);border:1px solid var(--border);border-radius:var(--r);padding:16px;box-shadow:var(--sh);margin-bottom:12px}
+.card-t{font-size:12px;font-weight:600;color:var(--gray);margin-bottom:12px;text-transform:uppercase;letter-spacing:.04em;display:flex;align-items:center;justify-content:space-between}
+
+/* ── FORM ELEMENTS ── */
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
+.field label{font-size:12px;font-weight:600;color:var(--gray)}
+.field input,.field select,.field textarea{width:100%;padding:7px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--white);color:#111;outline:none;transition:border-color .15s}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:var(--blue);box-shadow:0 0 0 2px rgba(26,86,219,.12)}
+.field textarea{resize:vertical;min-height:80px}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.grid4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px}
+
+/* ── TOGGLE ── */
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f3f4f6}
+.toggle-row:last-child{border-bottom:none}
+.toggle-lbl{display:flex;flex-direction:column;gap:2px}
+.toggle-lbl span{font-size:13px;color:#111}
+.toggle-lbl small{font-size:11px;color:var(--gray)}
+.toggle{position:relative;width:36px;height:20px;cursor:pointer;flex-shrink:0;display:inline-block}
+.toggle input{opacity:0;width:0;height:0;position:absolute}
+.tslider{position:absolute;inset:0;background:#d1d5db;border-radius:20px;transition:.2s;cursor:pointer}
+.tslider:before{content:"";position:absolute;height:14px;width:14px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s}
+.toggle input:checked + .tslider{background:var(--blue)}
+.toggle input:checked + .tslider:before{transform:translateX(16px)}
+
+/* ── CUSTOMER TABLE ── */
+.tbl-wrap{overflow-x:auto}
+table.cust-tbl{width:100%;border-collapse:collapse;font-size:12px}
+table.cust-tbl th{padding:6px 9px;text-align:left;color:var(--gray);font-weight:600;border-bottom:1px solid var(--border);white-space:nowrap;font-size:11px;background:#fafafa}
+table.cust-tbl td{padding:6px 9px;border-bottom:1px solid #f3f4f6;vertical-align:middle}
+table.cust-tbl tr:hover td{background:#f0f7ff}
+
+/* ── BADGES ── */
+.bdg{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:500}
+.bdg-blue{background:var(--blue-l);color:var(--blue);border:1px solid var(--blue-b)}
+.bdg-green{background:var(--green-l);color:var(--green);border:1px solid var(--green-b)}
+.bdg-amber{background:var(--amber-l);color:var(--amber);border:1px solid var(--amber-b)}
+.bdg-gray{background:#f3f4f6;color:var(--gray);border:1px solid var(--border)}
+.bdg-red{background:var(--red-l);color:var(--red);border:1px solid var(--red-b)}
+
+/* ── TAG INPUT ── */
+.tag-wrap{display:flex;flex-wrap:wrap;gap:5px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;min-height:36px;background:var(--white);cursor:text;transition:border-color .15s}
+.tag-wrap:focus-within{border-color:var(--blue);box-shadow:0 0 0 2px rgba(26,86,219,.12)}
+.tag-wrap input{border:none;outline:none;font-size:12px;background:transparent;color:#111;min-width:140px;flex:1;padding:2px 0}
+.tag-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;background:var(--blue-l);color:var(--blue);border-radius:20px;font-size:11px;border:1px solid var(--blue-b)}
+.tag-chip button{background:none;border:none;cursor:pointer;color:var(--blue);padding:0;line-height:1;font-size:14px;display:flex;align-items:center}
+
+/* ── COL SELECTOR ── */
+.col-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:6px}
+.col-item{display:flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;cursor:pointer;user-select:none;transition:all .12s}
+.col-item.sel{border-color:var(--blue);background:var(--blue-l);color:var(--blue)}
+.col-item:hover:not(.sel){background:#f9fafb}
+.col-item .chk{font-size:14px;flex-shrink:0}
+
+/* ── CHIPS ── */
+.chip-grp{display:flex;flex-wrap:wrap;gap:5px}
+.chip{padding:3px 10px;border-radius:14px;border:1px solid var(--border);background:var(--white);color:var(--gray);font-size:12px;cursor:pointer;transition:all .12s}
+.chip.on{background:var(--blue-l);color:var(--blue);border-color:var(--blue-b)}
+
+/* ── SECTION TITLE ── */
+.sec-ttl{font-size:12px;font-weight:600;color:var(--gray);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #f3f4f6}
+
+/* ── ACTION BAR ── */
+.action-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px}
+
+/* ── SCHEDULE TABLE ── */
+.sched-row{display:grid;grid-template-columns:2fr 1fr 1fr 80px;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid #f3f4f6}
+.sched-row:first-child{padding-top:0}
+.sched-row:last-child{border-bottom:none}
+
+/* ── PREVIEW ── */
+.preview-tbl-wrap{overflow-x:auto;max-height:400px;overflow-y:auto}
+table.prev-tbl{width:100%;border-collapse:collapse;font-size:11px}
+table.prev-tbl th{background:var(--blue-l);color:var(--blue);padding:6px 9px;text-align:left;font-weight:600;border:1px solid var(--blue-b);white-space:nowrap;position:sticky;top:0}
+table.prev-tbl td{padding:5px 9px;border:1px solid #f3f4f6;white-space:nowrap}
+table.prev-tbl tr:nth-child(even) td{background:#f9fafb}
+table.prev-tbl tfoot td{background:var(--green-l);color:var(--green);font-weight:700;border:1px solid var(--green-b)}
+
+/* ── MODAL ── */
+#modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:999;align-items:center;justify-content:center}
+#modal-overlay.open{display:flex}
+.modal-box{background:var(--white);border-radius:var(--r);padding:24px;width:620px;max-width:96vw;max-height:88vh;overflow-y:auto;position:relative;box-shadow:0 8px 32px rgba(0,0,0,.18)}
+.modal-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+.modal-hdr h2{font-size:16px;font-weight:700}
+.modal-close{background:none;border:1px solid var(--border);border-radius:6px;width:30px;height:30px;cursor:pointer;font-size:16px;color:var(--gray);display:flex;align-items:center;justify-content:center}
+.modal-close:hover{background:#f3f4f6}
+.modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border)}
+
+/* ── SAVING SPINNER ── */
+.spin{width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── EMPTY STATE ── */
+.empty{text-align:center;padding:28px;color:var(--gray);font-size:13px}
+
+.col-item.m-col-inherited { opacity: 0.65; }
+.col-item.m-col-inherited.sel { opacity: 1; }
+
+/* ── RESPONSIVE ── */
+@media(max-width:680px){.grid2,.grid3,.grid4{grid-template-columns:1fr}.sched-row{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="hdr">
+    <div class="hdr-l">
+      <div class="logo">📧</div>
+      <h1>Customer Statement Setup</h1>
+      <span class="badge b-live">SharePoint</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="aging-status" style="font-size:11px;color:var(--gray);margin-right:8px"></span><span id="s-time" style="font-size:11px;color:var(--gray)"></span>
+    </div>
+  </div>
+
+  <div class="src-bar">
+    📁 <strong>SharePoint:</strong> nvidia.sharepoint.com/sites/ARCollection/
+    <code>Shared Documents/Collection/SetupCustomerSchedule.xlsx</code>
+    &nbsp;·&nbsp;
+    <code>Aging With Customer Notes.xlsx</code>
+    <span id="aging-file-time" style="color:var(--gray);font-size:11px;margin-left:6px"></span>
+  </div>
+
+  <div id="err-bar" class="err-bar"><span>⚠️</span><span id="err-msg"></span></div>
+  <div id="ok-bar" class="ok-bar"><span>✅</span><span id="ok-msg"></span></div>
+
+  <!-- ══════════ TABS ══════════ -->
+  <div class="tabs" id="tab-bar">
+    <button class="tab on" data-tab="customers">👥 Customers</button>
+    <button class="tab" data-tab="filters">🔍 Filters &amp; Columns</button>
+    <button class="tab" data-tab="schedule">📅 Schedule</button>
+    <button class="tab" data-tab="preview">👁 Preview &amp; Save</button>
+  </div>
+
+  <!-- ══════════ TAB: CUSTOMERS ══════════ -->
+  <div id="t-customers">
+    <div class="action-bar">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="cust-search" type="text" placeholder="🔍 Search all columns… (Enter)"
+               style="padding:7px 11px;font-size:12px;border:1px solid var(--border);border-radius:6px;width:240px;outline:none">
+        <button class="btn btn-outline btn-sm" id="btn-reload">↺ Reload from SharePoint</button>
+        <span id="setup-file-time" style="font-size:11px;color:var(--gray)"></span>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-outline btn-sm" id="btn-cust-download-xl">⬇ Excel</button>
+        <button class="btn btn-primary btn-sm" id="btn-add-cust">+ Add Customer</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="tbl-wrap">
+        <table class="cust-tbl">
+          <thead>
+            <tr>
+              <th>Cust No.</th>
+              <th>Customer Name</th>
+              <th>To Email(s)</th>
+              <th>CC</th>
+              <th>Email Type</th>
+              <th>Schedule</th>
+              <th>Options</th>
+              <th style="text-align:center">Actions</th>
+            </tr>
+            <tr id="cust-col-filters" style="background:#f8fafc">
+              <td><input class="col-filter" data-col="custno"    type="text" placeholder="filter…" style="width:100%;padding:3px 5px;font-size:11px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box"></td>
+              <td><input class="col-filter" data-col="name"      type="text" placeholder="filter…" style="width:100%;padding:3px 5px;font-size:11px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box"></td>
+              <td><input class="col-filter" data-col="to"        type="text" placeholder="filter…" style="width:100%;padding:3px 5px;font-size:11px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box"></td>
+              <td><input class="col-filter" data-col="cc"        type="text" placeholder="filter…" style="width:100%;padding:3px 5px;font-size:11px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box"></td>
+              <td><input class="col-filter" data-col="emailtype" type="text" placeholder="filter…" style="width:100%;padding:3px 5px;font-size:11px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box"></td>
+              <td><input class="col-filter" data-col="schedule"  type="text" placeholder="filter…" style="width:100%;padding:3px 5px;font-size:11px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box"></td>
+              <td><input class="col-filter" data-col="group"     type="text" placeholder="filter…" style="width:100%;padding:3px 5px;font-size:11px;border:1px solid var(--border);border-radius:4px;box-sizing:border-box"></td>
+              <td><button id="btn-clear-col-filters" class="btn btn-outline btn-sm" style="font-size:10px;width:100%">Clear</button></td>
+            </tr>
+          </thead>
+          <tbody id="cust-tbody">
+            <tr><td colspan="8" class="empty">Loading from SharePoint…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;padding:4px 0;align-items:center">
+      <span id="cust-count" style="font-size:11px;color:var(--gray)"></span>
+    </div>
+  </div>
+
+  <!-- ══════════ TAB: FILTERS & COLUMNS ══════════ -->
+  <div id="t-filters" style="display:none">
+    <!-- Admin-only notice -->
+    <div id="filters-readonly-banner" style="display:none;background:var(--amber-l);border:1px solid var(--amber-b);border-radius:7px;padding:9px 14px;margin-bottom:12px;font-size:13px;color:var(--amber)">
+      &#128274; <strong>View only</strong> — only SharePoint site administrators can modify Filters &amp; Columns settings.
+    </div>
+    <fieldset id="filters-admin-controls" style="border:none;margin:0;padding:0">
+    <!-- Admin-only notice (shown to non-admins) -->
+    <div id="filters-readonly-banner" style="display:none;background:var(--amber-l);border:1px solid var(--amber-b);border-radius:7px;padding:9px 14px;margin-bottom:12px;font-size:13px;color:var(--amber)">
+      &#128274; <strong>View only</strong> — only SharePoint site administrators can modify Filters &amp; Columns settings.
+    </div>
+    <div id="filters-admin-controls">
+
+    <div class="card">
+      <div class="card-t">Data Filters — applied when generating each statement</div>
+
+      <div class="sec-ttl">Row inclusion rules</div>
+      <div class="grid2" style="margin-bottom:14px">
+        <div class="field">
+          <label>Consolidated Customer field</label>
+          <select id="flt-consolidated">
+            <option value="empty">Only if EMPTY (individual customers)</option>
+            <option value="notempty">Only if FILLED (consolidated view)</option>
+            <option value="all">Show all regardless</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Promised Date filter</label>
+          <select id="flt-promised">
+            <option value="empty">Only if EMPTY (no promise yet → show)</option>
+            <option value="notempty">Only if FILLED</option>
+            <option value="all">Show all</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>ARMA records (ARMA = "ARMA")</label>
+          <select id="flt-arma">
+            <option value="include">Include ARMA (Y per customer override)</option>
+            <option value="exclude">Exclude all ARMA</option>
+            <option value="all">Show all</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Negative Invoice Balance</label>
+          <select id="flt-negative">
+            <option value="exclude">Exclude negative balances (N filter)</option>
+            <option value="include">Include negative balances</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="sec-ttl">Additional filters (leave blank = all)</div>
+      <div class="grid3">
+        <div class="field">
+          <label>Document Types (multi-select)</label>
+          <div class="chip-grp" id="flt-doctypes">
+            <span class="chip on" data-val="RV">Invoice (RV)</span>
+            <span class="chip on" data-val="DG">Credit (DG)</span>
+            <span class="chip on" data-val="ZC">ZC</span>
+            <span class="chip" data-val="AB">AB</span>
+            <span class="chip" data-val="DA">DA</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>Default Business Unit</label>
+          <input id="flt-bu" type="text" placeholder="e.g. EA (leave blank = all)">
+        </div>
+        <div class="field">
+          <label>Default CoCode</label>
+          <input id="flt-cocode" type="text" placeholder="e.g. 2100 (leave blank = all)">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-t">
+        Statement Columns — select which columns appear in the attachment
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-outline btn-sm" id="btn-cols-all">Select all</button>
+          <button class="btn btn-outline btn-sm" id="btn-cols-none">Clear all</button>
+          <button class="btn btn-outline btn-sm" id="btn-cols-default">Reset default</button>
+        </div>
+      </div>
+      <div class="col-grid" id="col-grid">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-t">Email Template</div>
+      <div class="grid2" style="margin-bottom:12px">
+        <div class="field">
+          <label>Subject line template</label>
+          <input id="tpl-subject" type="text" value="Account Statement — {CustomerName} — {Date}">
+        </div>
+        <div class="field">
+          <label>Sender display name</label>
+          <input id="tpl-sender" type="text" value="NVIDIA AR Collections">
+        </div>
+      </div>
+      <div class="field">
+        <label>Body template — use {CustomerName} {Date} {Collector} as placeholders</label>
+        <textarea id="tpl-body">Dear {CustomerName},
+
+Please find attached your account statement as of {Date}.
+
+Kindly review and contact us at your earliest convenience should you have any queries or discrepancies.
+
+Best regards,
+{Collector}
+NVIDIA Accounts Receivable</textarea>
+      </div>
+    </div>
+  </div>
+
+    </div><!-- /filters-admin-controls -->
+    </fieldset><!-- /filters-admin-controls -->
+  <!-- ══════════ TAB: SCHEDULE ══════════ -->
+  <div id="t-schedule" style="display:none">
+    <div class="card" style="background:var(--blue-l);border-color:var(--blue-b);margin-bottom:12px">
+      <div style="font-size:13px;color:#1e3a8a">
+        ℹ️ <strong>Schedule logic:</strong> Daily = every business day ·
+        Weekly = day 1–7 of the week (1=Mon … 5=Fri) ·
+        Monthly = day of month 1–31
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-t" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Per-customer send schedule</span>
+        <button class="btn btn-outline btn-sm" id="btn-sched-download-xl">⬇ Excel</button>
+      </div>
+      <div id="sched-list">
+        <div class="empty">No customers loaded yet.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══════════ TAB: PREVIEW & SAVE ══════════ -->
+  <div id="t-preview" style="display:none">
+
+    <!-- ── STEP 1: GROUP & SELECT ── -->
+    <div class="card">
+      <div class="card-t">Step 1 — Group &amp; Select Customers</div>
+
+      <div class="grid2" style="margin-bottom:10px;align-items:end">
+        <div class="field">
+          <label>Filter by Collector <span style="font-weight:400;font-size:11px;color:var(--gray)">(optional)</span></label>
+          <select id="filter-collector" style="width:100%;padding:7px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--white)">
+            <option value="">— All collectors —</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Filter by Group <span style="font-weight:400;font-size:11px;color:var(--gray)">(optional)</span></label>
+          <select id="filter-group" style="width:100%;padding:7px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--white)">
+            <option value="">— All groups —</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+        <button class="btn btn-outline btn-sm" id="btn-prev-all">Select all</button>
+        <button class="btn btn-outline btn-sm" id="btn-prev-none">Clear</button>
+        <button class="btn btn-outline btn-sm" id="btn-prev-invert">Invert</button>
+      </div>
+
+      <!-- Search within checklist -->
+      <div style="margin-bottom:8px">
+        <input id="prev-cust-search" type="text" placeholder="🔍 Search customers in list…"
+          style="width:100%;padding:7px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px;box-sizing:border-box">
+      </div>
+      <!-- Customer checklist — grouped, filterable, paginated (20 per page) -->
+      <div id="cust-checklist" style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:4px">
+        <div class="empty">Loading customers...</div>
+      </div>
+
+      <!-- Pagination -->
+      <div id="checklist-pagination" style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+        <button class="btn btn-outline btn-sm" id="btn-prev-page">&#8249; Prev</button>
+        <span id="page-info" style="font-size:12px;color:var(--gray)"></span>
+        <button class="btn btn-outline btn-sm" id="btn-next-page">Next &#8250;</button>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;flex-wrap:wrap;gap:8px">
+      <!-- Pagination -->
+      <div id="checklist-pagination" style="display:flex;align-items:center;gap:6px;margin-top:6px;flex-wrap:wrap">
+        <button class="btn btn-outline btn-sm" id="btn-prev-page">&#8249; Prev</button>
+        <span id="page-info" style="font-size:12px;color:var(--gray);min-width:80px;text-align:center"></span>
+        <button class="btn btn-outline btn-sm" id="btn-next-page">Next &#8250;</button>
+      </div>
+        <span style="font-size:12px;color:var(--gray)" id="checklist-count"></span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <label style="font-size:13px;color:var(--gray)">Statement date:</label>
+          <input id="prev-date" type="date" style="padding:6px 10px;font-size:13px;border:1px solid var(--border);border-radius:6px">
+        </div>
+      </div>
+    </div>
+
+    <!-- ── STEP 2: PREVIEW ── -->
+    <div class="card">
+      <div class="card-t" style="justify-content:space-between">
+        <span>Step 2 — Preview Statement</span>
+        <button class="btn btn-outline btn-sm" id="btn-preview-refresh">Preview selected</button>
+      </div>
+      <div style="font-size:11px;color:var(--gray);margin-bottom:8px" id="prev-summary"></div>
+      <div id="prev-area">
+        <div class="empty">Select customers above and click "Preview selected".</div>
+      </div>
+    </div>
+
+    <!-- ── STEP 3: SEND ── -->
+    <div class="card">
+      <div class="card-t">Step 3 — Send Emails</div>
+
+      <!-- Option A: Power Automate (recommended — no login needed) -->
+      <div style="background:var(--green-l);border:1px solid var(--green-b);border-radius:7px;padding:12px 14px;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:600;color:var(--green);margin-bottom:6px">
+          &#9654; Option A — Power Automate <span style="font-weight:400;font-size:11px">(recommended — sends from NVARCollection@nvidia.com, no login required)</span>
+        </div>
+        <p style="font-size:12px;color:#374151;margin-bottom:8px">
+          Paste your flow's HTTP trigger URL below. The flow runs in the cloud and sends all selected customer statements automatically.<br>
+          <strong>To get the URL:</strong> make.powerautomate.com → open your flow → click the <em>"When a HTTP request is received"</em> trigger → copy the <em>HTTP POST URL</em>.
+        </p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="inp-pa-url" type="text" readonly
+            value="https://default43083d15727340c1b7db39efd9ccc1.7a.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/d408235839a7419cab763c1ca9272514/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=GeDlqzY-Rneaq-Wbeq8a41GxSJ7T9pU_7b9OYREoeD4"
+            style="flex:1;min-width:260px;padding:7px 10px;font-size:12px;border:1px solid var(--green-b);border-radius:6px;background:#f3f4f6;color:var(--gray);cursor:default">
+          <button class="btn btn-sm" id="btn-send-pa" style="background:var(--green);color:#fff;border:none;white-space:nowrap">
+            &#9654; Run Flow (send all)
+          </button>
+        </div>
+      </div>
+
+
+
+
+
+      <!-- Option C: Send directly via Graph -->
+      <div style="background:#f9fafb;border:1px solid var(--border);border-radius:7px;padding:10px 14px;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:4px">
+          &#9654; Option B — Send directly (with Excel attachment) <span style="font-weight:400;font-size:11px">(sends immediately via Microsoft Graph from your Outlook account, with Excel attached)</span>
+        </div>
+
+        <!-- Auth status -->
+        <div id="graph-auth-banner" style="background:var(--blue-l);border:1px solid var(--blue-b);border-radius:6px;padding:10px 12px;margin-bottom:8px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+            <span style="font-size:12px;color:#1e3a8a;font-weight:600">&#128274; Requires Azure AD app registration by IT</span>
+            <button class="btn btn-sm" id="btn-graph-auth" style="background:#1a56db;color:#fff;border:none;padding:4px 12px;font-size:12px">Connect Outlook</button>
+          </div>
+          <details style="font-size:11px;color:#374151">
+            <summary style="cursor:pointer;color:#1a56db;font-weight:500">&#9432; How to set up — IT steps (click to expand)</summary>
+            <div style="margin-top:8px;line-height:1.7;background:var(--white);border-radius:5px;padding:8px 10px;border:1px solid var(--blue-b)">
+              <strong>1. Azure Portal → App registrations → + New registration</strong><br>
+              &nbsp;&nbsp;• Name: <code>NV AR Customer Statement</code><br>
+              &nbsp;&nbsp;• Supported account types: <em>Single tenant (NVIDIA only)</em><br>
+              &nbsp;&nbsp;• Platform: <em>Single-page application (SPA)</em><br>
+              &nbsp;&nbsp;• Redirect URI: <code id="redirect-uri-display">https://nvidia.sharepoint.com/_layouts/15/blank.aspx</code><br><br>
+              <strong>2. API Permissions → Add → Microsoft Graph → Delegated</strong><br>
+              &nbsp;&nbsp;• <code>Mail.Send</code> &nbsp;•&nbsp; <code>Mail.ReadWrite</code> &nbsp;•&nbsp; <code>User.Read</code><br>
+              &nbsp;&nbsp;• Click <em>"Grant admin consent for NVIDIA"</em><br><br>
+              <strong>3. Authentication tab</strong><br>
+              &nbsp;&nbsp;• Allow public client flows: <em>Yes</em><br><br>
+              <strong>4. Copy the Client ID and paste below, then upload updated JS</strong><br>
+              <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
+                <input id="inp-client-id" type="text" placeholder="Paste Azure AD Client ID here (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"
+                  style="flex:1;padding:4px 8px;font-size:11px;border:1px solid var(--blue-b);border-radius:4px;font-family:monospace">
+                <button class="btn btn-outline btn-sm" id="btn-apply-client-id" style="font-size:11px;white-space:nowrap">Apply &amp; Connect</button>
+              </div>
+            </div>
+          </details>
+        </div>
+        <div id="graph-auth-ok" style="display:none;background:var(--green-l);border:1px solid var(--green-b);border-radius:6px;padding:8px 12px;margin-bottom:8px;align-items:center;gap:10px">
+          <span style="font-size:12px;color:var(--green)">&#10003; Connected as <strong id="graph-user-name"></strong></span>
+          <button class="btn btn-outline btn-sm" id="btn-graph-disconnect" style="font-size:11px;margin-left:auto">Disconnect</button>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn btn-primary btn-sm" id="btn-send-direct">&#9654; Send Now (direct)</button>
+          <button class="btn btn-outline btn-sm" id="btn-save-draft-direct">&#128229; Save to Drafts</button>
+          <span id="direct-send-status" style="font-size:11px;color:var(--gray)"></span>
+        </div>
+      </div>
+
+      <!-- Option D: EML download -->
+      <div style="background:#f9fafb;border:1px solid var(--border);border-radius:7px;padding:10px 14px;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:4px">
+          &#128206; Option C — Download .EML files <span style="font-weight:400;font-size:11px">(open in Outlook, review &amp; send manually)</span>
+        </div>
+        <p style="font-size:12px;color:var(--gray);margin-bottom:8px">One .EML file per customer. Double-click to open in Outlook — To, CC, Subject, body, and Excel attachment are pre-filled.</p>
+        <button class="btn btn-outline btn-sm" id="btn-eml-download">&#128206; Download .EML files</button>
+      </div>
+
+      <!-- Progress / results -->
+      <div id="send-progress" style="display:none">
+        <div style="background:#f3f4f6;border-radius:6px;height:8px;margin-bottom:8px;overflow:hidden">
+          <div id="send-prog-bar" style="background:var(--blue);height:100%;width:0%;transition:width .3s;border-radius:6px"></div>
+        </div>
+        <div id="send-prog-text" style="font-size:12px;color:var(--gray)"></div>
+      </div>
+      <div id="send-results" style="margin-top:10px"></div>
+    </div>
+
+    <!-- ── SAVE & EXPORT ── -->
+    <div class="card">
+      <div class="card-t">Save &amp; Export</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-primary" id="btn-save-sp">Save to SharePoint</button>
+        <button class="btn btn-outline" id="btn-download-xl">Download as Excel</button>
+        <button class="btn btn-outline" id="btn-force-unlock-main" title="Use this if Save keeps failing with a 423 lock error" style="color:var(--amber);border-color:var(--amber-b);background:var(--amber-l)">🔓 Force Unlock File</button>
+        <button class="btn btn-outline" id="btn-export-pa">Export Power Automate JSON</button>
+        <button class="btn btn-outline" id="btn-export-py">Export Python Script</button>
+      </div>
+      <div id="save-status" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+</div><!-- /app -->
+
+<!-- ══════════ ADD / EDIT MODAL ══════════ -->
+<div id="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-hdr">
+      <h2 id="modal-title">Add Customer</h2>
+      <button class="modal-close" id="btn-modal-close">✕</button>
+    </div>
+
+    <!-- hidden id for edit mode -->
+    <input type="hidden" id="m-id" value="">
+
+    <!-- Aging-driven datalists — populated by JS after aging loads -->
+    <datalist id="dl-custno"></datalist>
+    <datalist id="dl-custname"></datalist>
+
+    <!-- CUSTOMER INFO -->
+    <div class="sec-ttl">Customer information
+      <span id="aging-lookup-note" style="font-weight:400;font-size:11px;color:var(--gray);text-transform:none;letter-spacing:0">
+        — type to search from aging data
+      </span>
+    </div>
+    <div class="grid2" style="margin-bottom:14px">
+      <div class="field">
+        <label>Customer No. *</label>
+        <input id="m-custno" type="text" list="dl-custno" placeholder="Type or pick from aging data" autocomplete="off">
+        <span style="font-size:11px;color:var(--gray)">Selecting fills name automatically</span>
+      </div>
+      <div class="field">
+        <label>Customer Name *</label>
+        <input id="m-custname" type="text" list="dl-custname" placeholder="Type or pick from aging data" autocomplete="off">
+        <span style="font-size:11px;color:var(--gray)">Selecting fills number automatically</span>
+      </div>
+    </div>
+
+    <!-- EMAIL -->
+    <div class="sec-ttl">Email settings</div>
+    <div class="field">
+      <label>To — recipient email(s) <small style="font-weight:400;color:var(--gray)">(press Enter or comma to add)</small></label>
+      <div class="tag-wrap" id="to-wrap">
+        <input id="to-input" type="text" placeholder="recipient@customer.com">
+      </div>
+    </div>
+    <div class="field">
+      <label>CC — collector / internal <small style="font-weight:400;color:var(--gray)">(press Enter or comma to add)</small></label>
+      <div class="tag-wrap" id="cc-wrap">
+        <input id="cc-input" type="text" placeholder="collector@nvidia.com">
+      </div>
+    </div>
+    <div class="grid2" style="margin-bottom:14px">
+      <div class="field">
+        <label>Email Type</label>
+        <select id="m-emailtype">
+          <option value="Statement">Statement</option>
+          <option value="Reminder">Reminder</option>
+          <option value="Dunning">Dunning</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Collector Name</label>
+        <select id="m-collector">
+          <option value="">-- select customer first --</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- FILTERS — shown only when frequency = None -->
+    <div id="cust-filters-section">
+    <div class="sec-ttl">Customer-specific filters
+      <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;color:var(--gray)">
+        — press Enter or | to add multiple values; leave blank = no filter
+      </span>
+    </div>
+    <div class="grid2" style="margin-bottom:10px">
+      <div class="field">
+        <label>END Customer</label>
+        <div class="tag-wrap" id="m-endcust-wrap" data-field="endcust">
+          <input id="m-endcust" type="text" placeholder="e.g. 403530-HPE-ENTERPRISE">
+        </div>
+      </div>
+      <div class="field">
+        <label>Business Unit</label>
+        <div class="tag-wrap" id="m-bu-wrap" data-field="bu">
+          <input id="m-bu" type="text" placeholder="e.g. DT|EA|ML">
+        </div>
+      </div>
+    </div>
+    <div class="grid2" style="margin-bottom:10px">
+      <div class="field">
+        <label>Customer Material</label>
+        <div class="tag-wrap" id="m-material-wrap" data-field="material">
+          <input id="m-material" type="text" placeholder="e.g. P45692-B21">
+        </div>
+      </div>
+      <div class="field">
+        <label>CoCode</label>
+        <div class="tag-wrap" id="m-cocode-wrap" data-field="cocode">
+          <input id="m-cocode-inp" type="text" placeholder="e.g. SG01|2100">
+          <!-- hidden select for aging-driven suggestions -->
+          <select id="m-cocode" style="display:none"></select>
+        </div>
+      </div>
+    </div>
+    <div class="grid2" style="margin-bottom:14px">
+      <div class="field">
+        <label>TYPE</label>
+        <div class="tag-wrap" id="m-type-wrap" data-field="type">
+          <input id="m-type" type="text" placeholder="e.g. Open Invoices">
+        </div>
+      </div>
+      <div class="field">
+        <label>Consolidated Customer</label>
+        <input id="m-consolidated" type="text" placeholder="leave blank = individual (pipe-separated: 102617|103322)">
+      </div>
+    </div>
+    <div class="field" style="margin-bottom:10px">
+      <label>Group <span style="font-weight:400;font-size:11px;color:var(--gray)">— free text label for grouping customers (e.g. "HPE", "Asia Pacific", "Top 10")</span></label>
+      <input id="m-group" type="text" placeholder="e.g. HPE Accounts">
+    </div>
+
+    </div><!-- /cust-filters-section -->
+
+
+    <!-- TOGGLES -->
+    <div class="sec-ttl">Include options</div>
+    <div style="margin-bottom:14px">
+      <div class="toggle-row">
+        <div class="toggle-lbl">
+          <span>Include ARMA</span>
+          <small>Y = show ARMA-flagged invoices in this customer's statement</small>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="m-arma" checked>
+          <span class="tslider"></span>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle-lbl">
+          <span>Include Credit</span>
+          <small>Y = include credit memos and negative balances</small>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="m-credit" checked>
+          <span class="tslider"></span>
+        </label>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle-lbl">
+          <span>Filter on Promised Date</span>
+          <small>Y = only show rows where Promised Date is empty</small>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="m-promised">
+          <span class="tslider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- SCHEDULE -->
+    <div class="sec-ttl">Send schedule</div>
+    <div class="grid2" style="margin-bottom:8px">
+      <div class="field">
+        <label>Frequency</label>
+        <select id="m-schedule">
+          <option value="None">None (manual only)</option>
+          <option value="Daily">Daily (Mon–Fri)</option>
+          <option value="Weekly">Weekly</option>
+          <option value="Monthly">Monthly</option>
+        </select>
+      </div>
+      <div class="field" id="sched-day-field">
+        <label id="m-schedtime-lbl">Day value</label>
+        <input id="m-schedtime" type="number" min="1" max="31" value="1">
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--gray);margin-bottom:4px" id="sched-hint">
+      Weekly: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri &middot; Monthly: 1&ndash;31 day of month
+    </div>
+
+    <!-- STATEMENT COLUMNS (per-customer override) -->
+    <div class="sec-ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
+      <span>Statement Columns
+        <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;color:var(--gray)">
+          — override which columns appear in this customer's statement
+        </span>
+      </span>
+      <span id="m-col-badge" style="padding:2px 9px;border-radius:14px;font-size:11px;font-weight:500;background:#f3f4f6;color:var(--gray);border:1px solid var(--border)">
+        Using global default
+      </span>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+      <button type="button" class="btn btn-outline btn-sm" id="btn-mcol-all" style="font-size:11px">Select all</button>
+      <button type="button" class="btn btn-outline btn-sm" id="btn-mcol-none" style="font-size:11px">Clear all</button>
+      <button type="button" class="btn btn-outline btn-sm" id="btn-mcol-reset" style="font-size:11px">↺ Use global default</button>
+    </div>
+    <div class="col-grid" id="m-col-grid" style="margin-bottom:14px;max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px">
+      <!-- Populated by renderModalColGrid() -->
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-outline btn-sm" id="btn-modal-cancel">Cancel</button>
+      <button class="btn btn-primary btn-sm" id="btn-modal-save">Save</button>
+    </div>
+  </div>
+</div><!-- /modal-overlay -->
+
+</body>
+</html>
