@@ -149,6 +149,9 @@ table.prev-tbl tfoot td{background:var(--green-l);color:var(--green);font-weight
 /* ── EMPTY STATE ── */
 .empty{text-align:center;padding:28px;color:var(--gray);font-size:13px}
 
+.col-item.m-col-inherited { opacity: 0.65; }
+.col-item.m-col-inherited.sel { opacity: 1; }
+
 /* ── RESPONSIVE ── */
 @media(max-width:680px){.grid2,.grid3,.grid4{grid-template-columns:1fr}.sched-row{grid-template-columns:1fr 1fr}}
 </style>
@@ -330,7 +333,7 @@ table.prev-tbl tfoot td{background:var(--green-l);color:var(--green);font-weight
       <div class="grid2" style="margin-bottom:12px">
         <div class="field">
           <label>Subject line template</label>
-          <input id="tpl-subject" type="text" value="Account Statement — {CustomerName} — {Date}">
+          <input id="tpl-subject" type="text" value="Account Statement — {CustomerName} ({CustNo}) — {Date}">
         </div>
         <div class="field">
           <label>Sender display name</label>
@@ -338,16 +341,14 @@ table.prev-tbl tfoot td{background:var(--green-l);color:var(--green);font-weight
         </div>
       </div>
       <div class="field">
-        <label>Body template — use {CustomerName} {Date} {Collector} as placeholders</label>
+        <label>Body template — use {CustomerName} {CustNo} {Date} {Collector} {SenderName} {Title} {WorkPhone} {Mobile} {SenderEmail} as placeholders</label>
         <textarea id="tpl-body">Dear {CustomerName},
 
-Please find attached your account statement as of {Date}.
+Enclosed please find your account statement as of {Date}.
+Appreciate your feedback if you find any discrepancies.
 
-Kindly review and contact us at your earliest convenience should you have any queries or discrepancies.
+If you have any query please contact us.</textarea>
 
-Best regards,
-{Collector}
-NVIDIA Accounts Receivable</textarea>
       </div>
     </div>
   </div>
@@ -545,6 +546,7 @@ NVIDIA Accounts Receivable</textarea>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-primary" id="btn-save-sp">Save to SharePoint</button>
         <button class="btn btn-outline" id="btn-download-xl">Download as Excel</button>
+        <button class="btn btn-outline" id="btn-force-unlock-main" title="Use this if Save keeps failing with a 423 lock error" style="color:var(--amber);border-color:var(--amber-b);background:var(--amber-l)">🔓 Force Unlock File</button>
         <button class="btn btn-outline" id="btn-export-pa">Export Power Automate JSON</button>
         <button class="btn btn-outline" id="btn-export-py">Export Python Script</button>
       </div>
@@ -730,6 +732,26 @@ NVIDIA Accounts Receivable</textarea>
     </div>
     <div style="font-size:11px;color:var(--gray);margin-bottom:4px" id="sched-hint">
       Weekly: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri &middot; Monthly: 1&ndash;31 day of month
+    </div>
+
+    <!-- STATEMENT COLUMNS (per-customer override) -->
+    <div class="sec-ttl" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
+      <span>Statement Columns
+        <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px;color:var(--gray)">
+          — override which columns appear in this customer's statement
+        </span>
+      </span>
+      <span id="m-col-badge" style="padding:2px 9px;border-radius:14px;font-size:11px;font-weight:500;background:#f3f4f6;color:var(--gray);border:1px solid var(--border)">
+        Using global default
+      </span>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+      <button type="button" class="btn btn-outline btn-sm" id="btn-mcol-all" style="font-size:11px">Select all</button>
+      <button type="button" class="btn btn-outline btn-sm" id="btn-mcol-none" style="font-size:11px">Clear all</button>
+      <button type="button" class="btn btn-outline btn-sm" id="btn-mcol-reset" style="font-size:11px">↺ Use global default</button>
+    </div>
+    <div class="col-grid" id="m-col-grid" style="margin-bottom:14px;max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px">
+      <!-- Populated by renderModalColGrid() -->
     </div>
 
     <div class="modal-footer">
