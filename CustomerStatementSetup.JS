@@ -43,7 +43,7 @@ var CSS_ST = {
 var FILTER_FIELDS = ['endcust','bu','material','cocode','type'];
 
 var ALL_COLS = [
-  'Company Name','SO Number','Customer Name','Cust No.','Customer PO','Pull Number',
+  'CoCode','Company Name','SO Number','Customer Name','Cust No.','Customer PO','Pull Number',
   'Doc','Invoice','Inv. List','Delivery','Inv Date','Due Date','Terms',
   'Current','Over Due  1','Over Due 31','Over Due 61','Over Due 91','Over Due 121',
   'Inv Balance','Comments','Header Text','Business Unit','END Customer',
@@ -51,14 +51,14 @@ var ALL_COLS = [
   'Collector Comments','Promised Date','Other'
 ];
 var DEFAULT_COLS = [
-  'Company Name','SO Number','Customer Name','Cust No.','Customer PO','Pull Number',
+  'CoCode','Company Name','SO Number','Customer Name','Cust No.','Customer PO','Pull Number',
   'Doc','Invoice','Inv. List','Delivery','Inv Date','Due Date','Terms',
   'Current','Over Due  1','Over Due 31','Over Due 61','Over Due 91','Over Due 121',
   'Inv Balance','Comments','Header Text','Business Unit','END Customer',
   'Customer Material','TYPE','Delivery Num'
 ];
 var COL_KEY_MAP = {
-  'Company Name':'CompanyName','SO Number':'SONumber','Customer Name':'CustomerName',
+  'CoCode':'CoCode','Company Name':'CompanyName','SO Number':'SONumber','Customer Name':'CustomerName',
   'Cust No.':'CustNo','Customer PO':'CustomerPO','Pull Number':'PullNumber',
   'Doc':'Doc','Invoice':'Invoice','Inv. List':'InvList','Delivery':'Delivery',
   'Inv Date':'InvDate','Due Date':'DueDate','Terms':'Terms',
@@ -142,6 +142,37 @@ function parseNum(v) {
   return isNaN(n)?0:n;
 }
 function fmtUSD(v) { return '$'+Math.round(Number(v)||0).toLocaleString('en-US'); }
+
+// Format a date value (JS Date object, ISO string, or Excel serial) → MM/DD/YYYY
+var DATE_COLS = ['Inv Date','Due Date','Promised Date'];
+function fmtDate(v) {
+  if(v === null || v === undefined || v === '') return '';
+  // Excel serial number (number or numeric string like "46196")
+  // Excel serials for 2000-2100 range from ~36526 to ~73050
+  var num = typeof v === 'number' ? v : parseFloat(String(v).trim());
+  if(!isNaN(num) && num > 36000 && num < 80000) {
+    var epoch = new Date(Math.round((num - 25569) * 86400 * 1000));
+    var mm0 = String(epoch.getUTCMonth()+1).padStart(2,'0');
+    var dd0 = String(epoch.getUTCDate()).padStart(2,'0');
+    return mm0+'/'+dd0+'/'+epoch.getUTCFullYear();
+  }
+  var s = String(v);
+  // Already formatted MM/DD/YYYY
+  if(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) return s;
+  // ISO string: 2026-05-24T00:00:00...
+  if(s.indexOf('T') > -1) s = s.split('T')[0];
+  // YYYY-MM-DD
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(m) return m[2]+'/'+m[3]+'/'+m[1];
+  // JS Date object or date string like "Sun May 24 2026..."
+  var d = (v instanceof Date) ? v : new Date(s);
+  if(!isNaN(d.getTime()) && d.getFullYear() > 1970) {
+    var mm = String(d.getMonth()+1).padStart(2,'0');
+    var dd = String(d.getDate()).padStart(2,'0');
+    return mm+'/'+dd+'/'+d.getFullYear();
+  }
+  return s;
+}
 
 // Robust row value getter — tries the exact column name, COL_KEY_MAP alias,
 // and trimmed variants to handle any whitespace differences in SP-served Excel files
@@ -227,6 +258,28 @@ function spSave(filename, arrayBuffer) {
   });
 }
 
+// ── FORCE-SAVE: upload via AddUsingPath?overwrite=true ───────────────────────
+// This endpoint ignores checkout locks — it overwrites the file regardless.
+// Used by forceUnlockAndSave when the normal PUT returns 423.
+function spSaveForce(filename, arrayBuffer) {
+  var folderUrl = spOrigin()+SP_BASE
+    +"/_api/web/GetFolderByServerRelativePath(decodedurl='"
+    +SP_BASE+'/'+SP_FOLDER
+    +"')/Files/AddUsingPath(decodedurl='"+encodeURIComponent(filename)+"',overwrite=true)";
+  return getDigest().then(function(digest) {
+    return fetch(folderUrl, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json;odata=verbose',
+        'X-RequestDigest': digest,
+        'Content-Type': 'application/octet-stream'
+      },
+      credentials: 'include',
+      body: arrayBuffer
+    });
+  });
+}
+
 // ── XLSX HELPERS ─────────────────────────────────────────
 function xlsxToRows(buf) {
   var wb = XLSX.read(buf, { type:'array', cellDates:true });
@@ -301,9 +354,9 @@ function customersToRows() {
       'Consolidated Customer':c.consolidated,
       'Collector Email':      c.cc.join('; '),
       'Email Type':           c.emailtype,
-      'Promised Date':        c.promised ? 'Y' : '',
-      'Include ARMA':         c.arma    ? 'Y' : '',
-      'Include Credit':       c.credit  ? 'Y' : '',
+      'Promised Date':        c.promised ? 'Y' : 'N',
+      'Include ARMA':         c.arma     ? 'Y' : 'N',
+      'Include Credit':       c.credit   ? 'Y' : 'N',
       'Group':                c.group||'',
       'Statement Columns':    c.cols||'',
       'Schedule':             c.schedule,
@@ -468,6 +521,7 @@ function loadAgingBackground(forceRefresh) {
           'Delivery Num':     r['Delivery Num'],
           'Collector':        r['Collector']||r['Collector Name'],
           'Company Name':     r['Company Name'],
+          'CoCode':           r['CoCode'],
           'Collector Comments': r['Collector Comments']||r['CollectorComments'],
           'Promised Date':    r['Promised Date'],
           'Other':            r['Other']
@@ -497,6 +551,7 @@ function loadAgingBackground(forceRefresh) {
             'TYPE':            r['TYPE'],
             'Collector':       r['Collector']||r['Collector Name'],
             'Customer Name':   r['Customer Name'],
+            'CoCode':          r['CoCode'],
             'Collector Comments': r['Collector Comments']||r['CollectorComments'],
             'Promised Date':   r['Promised Date'],
             'Other':           r['Other']
@@ -944,10 +999,190 @@ function getSelectedPrevIds() {
 function getSelectedCustomers() {
   // Primary: checklist checkboxes (Step 1)
   var fromChecklist = getChecklistSelected();
-  if(fromChecklist.length) return fromChecklist;
-  // Fallback: prev-cust multi-select (legacy)
-  var ids = getSelectedPrevIds();
-  return CSS_ST.customers.filter(function(c){ return ids.indexOf(c.id)>-1; });
+  var raw = fromChecklist.length ? fromChecklist : (function(){
+    // Fallback: prev-cust multi-select (legacy)
+    var ids = getSelectedPrevIds();
+    return CSS_ST.customers.filter(function(c){ return ids.indexOf(c.id)>-1; }).map(effCust);
+  })();
+  raw = raw.map(function(c){ return Object.assign({}, c); });
+
+  // Deduplicate consolidated groups: when multiple selected customers share a
+  // consolidated list, send only ONE email covering all of them.
+  //
+  // Algorithm:
+  // 1. Group selected customers by their consolidated signature (sorted custno set).
+  //    Customers with no consolidated field form singleton groups.
+  // 2. From each group, elect one "winner" to send — prefer the one with a non-empty
+  //    "to" field; if tied, pick lowest custno alphabetically.
+  // 3. Give the winner any to/cc from group-mates it is missing.
+
+  var selectedByNo = {};
+  raw.forEach(function(c){ selectedByNo[c.custno] = c; });
+
+  // Build a canonical group key for each customer: sorted set of all custno values
+  // in its consolidated field (including its own).
+  function groupKey(c) {
+    var nos = {};
+    nos[c.custno] = 1;
+    if(c.consolidated && c.consolidated.trim()) {
+      c.consolidated.split('|').forEach(function(n){ var t=n.trim(); if(t) nos[t]=1; });
+    }
+    // Entries for the SAME customer but with DIFFERENT filters/options are separate
+    // statements, so the filter signature is part of the key.
+    var sig = [c.endcust||'', c.bu||'', c.material||'', c.cocode||'', c.type||'',
+               c.arma?1:0, c.credit?1:0, c.promised?1:0].join('~').toLowerCase();
+    return Object.keys(nos).sort().join('|') + '#' + sig;
+  }
+
+  // Group selected customers by their consolidated signature
+  var groups = {};   // key → [customer, ...]
+  raw.forEach(function(c) {
+    var k = groupKey(c);
+    if(!groups[k]) groups[k] = [];
+    groups[k].push(c);
+  });
+
+  var result = [];
+  Object.keys(groups).forEach(function(k) {
+    var group = groups[k];
+    if(group.length === 1) {
+      result.push(group[0]);
+      return;
+    }
+
+    // Multiple customers in this consolidated group — elect one winner
+    var winner = group.slice().sort(function(a, b) {
+      // Prefer the one that has "to" emails
+      var aHas = (a.to && a.to.length) ? 1 : 0;
+      var bHas = (b.to && b.to.length) ? 1 : 0;
+      if(bHas !== aHas) return bHas - aHas;
+      // Tiebreak: lowest custno
+      return a.custno < b.custno ? -1 : 1;
+    })[0];
+
+    // Merge to/cc/collector from all group members into the winner clone
+    var mergedTo = (winner.to||[]).slice();
+    var mergedCc = (winner.cc||[]).slice();
+    group.forEach(function(c) {
+      if(c === winner) return;
+      (c.to||[]).forEach(function(e){ if(e && mergedTo.indexOf(e)===-1) mergedTo.push(e); });
+      (c.cc||[]).forEach(function(e){ if(e && mergedCc.indexOf(e)===-1) mergedCc.push(e); });
+    });
+
+    var clone = Object.assign({}, winner);
+    clone.to = mergedTo;
+    clone.cc = mergedCc;
+    if(!clone.collector && mergedCc.length) clone.collector = mergedCc[0];
+    result.push(clone);
+  });
+
+  // Same customer number used by several entries (different filters): give each a unique
+  // file-name tag (_1, _2 ...) so attachments do not overwrite / collide.
+  var cnt = {}, seen = {};
+  result.forEach(function(c){ cnt[c.custno] = (cnt[c.custno]||0) + 1; });
+  result.forEach(function(c){
+    if(cnt[c.custno] > 1){ seen[c.custno] = (seen[c.custno]||0) + 1; c.fileTag = '_' + seen[c.custno]; }
+    else c.fileTag = '';
+  });
+  return result;
+}
+
+// ── AD-HOC FILTER HELPERS ─────────────────────────────────────────────────
+var ADHOC_TEXT  = [['endcust','END Customer'],['bu','Business Unit'],['material','Customer Material'],['cocode','CoCode'],['type','TYPE']];
+var ADHOC_FLAGS = [['arma','Include ARMA'],['credit','Include Credit'],['promised','Filter on Promised Date']];
+
+function fileTag(c){ return (c && c.fileTag) || ''; }
+
+// Saved customer + any ad-hoc overrides (never mutates the saved customer)
+function effCust(c){
+  var o = Object.assign({}, c);
+  var a = CSS_ST._adhoc && CSS_ST._adhoc[c.id];
+  if(a){ Object.keys(a).forEach(function(k){ o[k] = a[k]; }); o._adhoc = true; }
+  return o;
+}
+
+// Short text describing the active filters, e.g. "CoCode: 2100 · ARMA off"
+function filterSummary(c){
+  var parts = [];
+  ADHOC_TEXT.forEach(function(f){ if(c[f[0]]) parts.push(f[1].replace('Customer ','').replace('Business Unit','BU')+': '+c[f[0]]); });
+  if(!c.arma)    parts.push('ARMA off');
+  if(!c.credit)  parts.push('Credit off');
+  if(c.promised) parts.push('Promised-date filter');
+  return parts.join(' \u00b7 ');
+}
+function custLabel(c){
+  var fs = filterSummary(c);
+  return esc(c.name) + (fs ? ' <span style="color:var(--gray);font-size:11px">[' + esc(fs) + ']</span>' : '');
+}
+
+function adhocPanelHTML(c){
+  var e = effCust(c);
+  var h = '<div class="adhoc-panel" data-cid="'+c.id+'" style="flex-basis:100%;margin:6px 0 4px 26px;padding:10px;background:#f8fafc;border:1px solid var(--border);border-radius:6px">'
+    + '<div style="font-size:11px;color:var(--gray);margin-bottom:6px">Ad-hoc filters for this send &mdash; use <b>|</b> between several values; blank = no filter. Changes apply to Preview/Send only until you click <b>Save to setup</b>.</div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px">';
+  ADHOC_TEXT.forEach(function(f){
+    h += '<label style="font-size:11px;color:var(--gray)">'+f[1]
+      + '<input class="adhoc-in" type="text" data-cid="'+c.id+'" data-f="'+f[0]+'" value="'+esc(e[f[0]]||'')+'" '
+      + 'style="width:100%;box-sizing:border-box;margin-top:2px;padding:5px 8px;font-size:12px;border:1px solid var(--border);border-radius:5px"></label>';
+  });
+  ADHOC_FLAGS.forEach(function(f){
+    h += '<label style="font-size:11px;color:var(--gray)">'+f[1]
+      + '<select class="adhoc-in" data-cid="'+c.id+'" data-f="'+f[0]+'" '
+      + 'style="width:100%;box-sizing:border-box;margin-top:2px;padding:5px 8px;font-size:12px;border:1px solid var(--border);border-radius:5px;background:var(--white)">'
+      + '<option value="Y"'+(e[f[0]]?' selected':'')+'>Yes</option><option value="N"'+(e[f[0]]?'':' selected')+'>No</option></select></label>';
+  });
+  h += '</div><div style="display:flex;gap:6px;margin-top:8px">'
+    + '<button class="btn btn-outline btn-sm adhoc-reset" data-cid="'+c.id+'">Reset to saved</button>'
+    + '<button class="btn btn-sm adhoc-save" data-cid="'+c.id+'" style="background:var(--blue,#1a56db);color:#fff;border:none">Save to setup</button>'
+    + '</div></div>';
+  return h;
+}
+
+function adhocRefreshRow(cid){
+  var row = document.querySelector('#cust-checklist [data-cid="'+cid+'"].cl-row');
+  var saved = CSS_ST.customers.filter(function(c){ return c.id===cid; })[0];
+  if(!row || !saved) return;
+  var e = effCust(saved);
+  var sum = row.querySelector('.adhoc-sum');
+  if(sum){ var fs = filterSummary(e); sum.textContent = fs; sum.style.display = fs ? '' : 'none'; }
+  var badge = row.querySelector('.adhoc-badge');
+  if(badge) badge.style.display = e._adhoc ? '' : 'none';
+}
+
+function adhocOnChange(t){
+  var cid = Number(t.getAttribute('data-cid')), f = t.getAttribute('data-f');
+  var saved = CSS_ST.customers.filter(function(c){ return c.id===cid; })[0]; if(!saved) return;
+  var val;
+  if(t.tagName === 'SELECT') val = (t.value === 'Y');
+  else {
+    val = (t.value||'').split('|').map(function(v){ return v.trim(); }).filter(Boolean).join('|');
+    t.value = val;
+  }
+  if(!CSS_ST._adhoc) CSS_ST._adhoc = {};
+  if(!CSS_ST._adhoc[cid]) CSS_ST._adhoc[cid] = {};
+  if(val === (saved[f]===undefined ? (typeof val==='boolean'?false:'') : saved[f])) delete CSS_ST._adhoc[cid][f];
+  else CSS_ST._adhoc[cid][f] = val;
+  if(!Object.keys(CSS_ST._adhoc[cid]).length) delete CSS_ST._adhoc[cid];
+  CSS_ST._checklistSel = CSS_ST._checklistSel || {};
+  CSS_ST._checklistSel[cid] = true;                       // editing implies "use this entry"
+  var chk = document.querySelector('#cust-checklist .cust-chk[data-cid="'+cid+'"]'); if(chk) chk.checked = true;
+  adhocRefreshRow(cid);
+  updateChecklistCount();
+  // keep an already-open preview in sync
+  var area = G('prev-area');
+  if(area && area.querySelector('.prev-tbl') && CSS_ST.agingLoaded) renderPreview();
+}
+
+function adhocSaveToSetup(cid){
+  var a = CSS_ST._adhoc && CSS_ST._adhoc[cid];
+  var real = CSS_ST.customers.filter(function(c){ return c.id===cid; })[0];
+  if(!real) return;
+  if(!a){ alert('No ad-hoc changes to save for this entry.'); return; }
+  Object.keys(a).forEach(function(k){ real[k] = a[k]; });
+  delete CSS_ST._adhoc[cid];
+  hideAlerts();
+  renderCustomers(); renderChecklist();
+  pushToSharePoint('modal', null, null);
 }
 
 // ── PREVIEW: multi-customer ────────────────────────────────────────────────
@@ -1085,9 +1320,12 @@ function renderCustomerPanel(cust, filtered) {
           var val=getRowVal(r,c,key);
           var disp=String(val===null||val===undefined?'':val);
           var isNum=NUM_COLS.indexOf(c)>-1;
+          var isDate=DATE_COLS.indexOf(c)>-1;
           if(isNum){
             var n=parseNum(val);
             disp = (n===0 && c!=='Inv Balance') ? '\u2014' : fmtUSD(n);
+          } else if(isDate){
+            disp = fmtDate(val);
           }
           return '<td'+(isNum?' style="text-align:right"':'')+'>'+esc(disp)+'</td>';
         }).join('')+'</tr>';
@@ -1105,6 +1343,7 @@ function renderCustomerPanel(cust, filtered) {
         +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
           +'<span style="font-weight:600;font-size:14px;color:'+bannerColor+'">'+esc(cust.name)+'</span>'
           +'<span class="bdg bdg-gray">#'+esc(cust.custno)+'</span>'
+          +(cust._adhoc?'<span class="bdg bdg-amber" title="Ad-hoc filters (not saved)">ad-hoc</span>':'')
           +(isConsolidated?'<span class="bdg bdg-blue" title="'+esc(nos.join(', '))+'">Consolidated ('+nos.length+' customers)</span>':'')
           +(filtered.length?'<span class="bdg bdg-green">'+filtered.length+' rows &bull; '+fmtUSD(total)+'</span>':'<span class="bdg bdg-amber">No open items</span>')
           +(filterBadges?'<span style="font-size:10px;color:var(--gray)">|</span>'+filterBadges:'')
@@ -1186,9 +1425,12 @@ function buildStatementHTML(cust, filtered) {
       var val=getRowVal(r,c,key);
       var disp=String(val===null||val===undefined?'':val);
       var isNum=NUM_COLS.indexOf(c)>-1;
+      var isDate=DATE_COLS.indexOf(c)>-1;
       if(isNum){
         var n=parseNum(val);
         disp = (n===0 && c!=='Inv Balance') ? '' : fmtUSD(n);
+      } else if(isDate){
+        disp = fmtDate(val);
       }
       return '<td align="'+(isNum?'right':'left')+'" style="padding:5px 8px;border-bottom:1px solid #e5e7eb;font-size:10px">'+esc(disp)+'</td>';
     }).join('')+'</tr>';
@@ -1247,7 +1489,7 @@ function downloadStatementXLS(cust, filtered) {
   var sheetName=String(cust.name).replace(/[:\\/?*\[\]]/g,'').substring(0,28);
   XLSX.utils.book_append_sheet(wb,ws,sheetName||'Statement');
   var today=new Date().toISOString().split('T')[0];
-  var fname='Statement_'+cust.custno+'_'+today+'.xlsx';
+  var fname='Statement_'+cust.custno+fileTag(cust)+'_'+today+'.xlsx';
   var buf=XLSX.write(wb,{bookType:'xlsx',type:'array'});
   var blob=new Blob([new Uint8Array(buf)],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   var url=URL.createObjectURL(blob);
@@ -1412,6 +1654,83 @@ function showGraphConnected(me) {
 
 // Silent connect — used by sendDirectly() before sending
 
+// ── SENDER PROFILE REFRESH ────────────────────────────────────────────────────
+// Called just before sending to ensure jobTitle and mobile are populated.
+// Uses the existing GRAPH_TOKEN if present (no popup). Resolves immediately if
+// profile is already complete or token unavailable.
+function refreshSenderProfile() {
+  // Already have title — nothing to do
+  if(CSS_ST._senderTitle) return Promise.resolve();
+  // Need a token that's already in memory — never trigger a popup here
+  if(!GRAPH_TOKEN || Date.now() >= GRAPH_TOKEN_EXP - 300000) return Promise.resolve();
+  return fetch('https://graph.microsoft.com/v1.0/me?$select=displayName,mail,jobTitle,mobilePhone,businessPhones', {
+    headers: { 'Authorization': 'Bearer ' + GRAPH_TOKEN }
+  }).then(function(r){ return r.json(); })
+  .then(function(me) {
+    var workPhone = (me.businessPhones && me.businessPhones[0]) || '';
+    applyProfileToSignature(
+      me.displayName || '',
+      me.jobTitle    || '',
+      workPhone,
+      me.mobilePhone || '',
+      me.mail        || ''
+    );
+    console.log('[CSS] refreshSenderProfile: jobTitle='+me.jobTitle);
+  }).catch(function(){});
+}
+
+// ── EMAIL BODY HELPERS ────────────────────────────────────────────────────────
+
+// Apply all template placeholders (subject or body)
+function applyBodyPlaceholders(tpl, cust, collector) {
+  var todayFmt = new Date().toLocaleDateString();
+  return tpl
+    .replace(/{CustomerName}/g, cust.name)
+    .replace(/{CustNo}/g,       cust.custno)
+    .replace(/{Date}/g,         todayFmt)
+    .replace(/{Collector}/g,    collector)
+    .replace(/{Title}/g,        CSS_ST._senderTitle     || '')
+    .replace(/{Mobile}/g,       CSS_ST._senderMobile    || '')
+    .replace(/{WorkPhone}/g,    CSS_ST._senderWorkPhone || '')
+    .replace(/{SenderName}/g,   CSS_ST._senderName      || '')
+    .replace(/{SenderEmail}/g,  CSS_ST._senderEmail     || '');
+}
+
+// Convert a plain-text email body to a full HTML email body with the
+// NVIDIA-branded signature block appended.
+function buildHtmlEmailBody(plainText, cust, collector) {
+  var name      = CSS_ST._senderName      || collector || 'NVIDIA AR Collections';
+  var title     = CSS_ST._senderTitle     || '';
+  var workPhone = CSS_ST._senderWorkPhone || '';
+  var mobile    = CSS_ST._senderMobile    || '';
+  var email     = CSS_ST._senderEmail     || '';
+
+  // Convert newlines to <br> and escape HTML entities in the body text
+  var htmlBody = plainText
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\n/g,'<br>');
+
+  var sigLines = [];
+  if(name)  sigLines.push('<strong>'+name.replace(/&/g,'&amp;')+'</strong>'
+                          +(title ? ' | '+title.replace(/&/g,'&amp;') : ''));
+  if(workPhone || mobile) {
+    var phones = [];
+    if(workPhone) phones.push('Work: '+workPhone);
+    if(mobile)    phones.push('Cell: '+mobile);
+    sigLines.push(phones.join(' | '));
+  }
+  if(email)  sigLines.push('E-mail: <a href="mailto:'+email+'">'+email+'</a>');
+  sigLines.push('NVIDIA');
+
+  return '<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;font-size:13px;color:#222;margin:0;padding:16px">'
+    + '<p style="white-space:pre-wrap;margin:0 0 24px">'+htmlBody+'</p>'
+    + '<div style="border-top:1px solid #e0e0e0;padding-top:12px;font-size:12px;color:#444;line-height:1.7">'
+    +   sigLines.join('<br>')
+    +   '<br>' + NVIDIA_LOGO_HTML
+    + '</div>'
+    + '</body></html>';
+}
+
 // ── POWER AUTOMATE HTTP TRIGGER ──────────────────────────────────────────────
 var PA_TRIGGER_URL = 'https://default43083d15727340c1b7db39efd9ccc1.7a.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/d408235839a7419cab763c1ca9272514/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=GeDlqzY-Rneaq-Wbeq8a41GxSJ7T9pU_7b9OYREoeD4';
 
@@ -1427,16 +1746,10 @@ function buildPACustomerPayload(cust) {
 
   var collector = cust.collector || (cust.cc && cust.cc[0]) || '';
   var tplSubj   = ((G('tpl-subject')||{}).value||'Account Statement - {CustomerName} - {Date}').trim();
-  var tplBody   = ((G('tpl-body')||{}).value||'Dear {CustomerName},\n\nPlease find attached your account statement as of {Date}.\n\nBest regards,\nNVIDIA AR Collections').trim();
+  var tplBody   = ((G('tpl-body')||{}).value||'Dear {CustomerName},\n\nEnclosed Please find attached your account statement as of {Date}.\n\nAppreciate your feedback if you find any discrepancies.\n\nIf you have any query please contact us.').trim();
 
-  var subject = tplSubj
-    .replace(/{CustomerName}/g, cust.name)
-    .replace(/{Date}/g, todayFmt)
-    .replace(/{Collector}/g, collector);
-  var bodyText = tplBody
-    .replace(/{CustomerName}/g, cust.name)
-    .replace(/{Date}/g, todayFmt)
-    .replace(/{Collector}/g, collector);
+  var subject  = applyBodyPlaceholders(tplSubj, cust, collector);
+  var bodyText = applyBodyPlaceholders(tplBody, cust, collector);
 
   // Build HTML statement body (same function used by EML / Graph sends)
   var htmlBody = buildStatementHTML(cust, filtered);
@@ -1450,7 +1763,7 @@ function buildPACustomerPayload(cust) {
       var key = COL_KEY_MAP[c]||c;
       var val = getRowVal(r,c,key);
       if(val === null || val === undefined) val = '';
-      var s = String(val);
+      var s = DATE_COLS.indexOf(c)>-1 ? fmtDate(val) : String(val);
       if(s.indexOf(',') > -1 || s.indexOf('"') > -1 || s.indexOf('\n') > -1) {
         s = '"' + s.replace(/"/g, '""') + '"';
       }
@@ -1459,7 +1772,7 @@ function buildPACustomerPayload(cust) {
     csvRows.push(row.join(','));
   });
   var csvContent = csvRows.join('\r\n');
-  var csvFname   = 'Statement_' + cust.custno + '_' + today + '.csv';
+  var csvFname   = 'Statement_' + cust.custno + fileTag(cust) + '_' + today + '.csv';
 
   var toArr = (cust.to || []).filter(function(e){ return e && e.trim(); });
   var ccArr = (cust.cc || []).filter(function(e){ return e && e.trim(); });
@@ -1504,8 +1817,8 @@ function runViaPowerAutomate() {
   if(progBar) progBar.style.width='20%';
   if(progTxt) progTxt.textContent='Building statements (' + custs.length + ' customer(s))...';
 
-  // Use setTimeout to allow the UI to repaint before heavy work
-  setTimeout(function() {
+  // Refresh sender profile (jobTitle etc.) then build payloads
+  refreshSenderProfile().then(function() { setTimeout(function() {
     var customerPayloads;
     try {
       customerPayloads = custs.map(buildPACustomerPayload);
@@ -1516,6 +1829,26 @@ function runViaPowerAutomate() {
         '<div style="background:var(--red-l);border:1px solid var(--red-b);border-radius:7px;padding:10px 14px;font-size:13px;color:var(--red)">'
           +'&#10007; Failed to build statements: '+esc(e.message)
         +'</div>';
+      return;
+    }
+
+    // Skip customers whose statement has no aging rows
+    var skipped = customerPayloads.filter(function(p){ return p.rowCount === 0; });
+    customerPayloads = customerPayloads.filter(function(p){ return p.rowCount > 0; });
+
+    if(skipped.length) {
+      var skipNames = skipped.map(function(p){ return esc(p.name)+' (#'+esc(p.custno)+')'; }).join(', ');
+      console.warn('[CSS] Skipping '+skipped.length+' customer(s) with no statement rows: '+skipNames);
+    }
+
+    if(!customerPayloads.length) {
+      if(progBar) progBar.style.width='100%';
+      if(progTxt) progTxt.textContent='Nothing to send — all selected customers have empty statements.';
+      if(results) results.innerHTML =
+        '<div style="background:var(--yellow-l,#fffbeb);border:1px solid var(--yellow-b,#fcd34d);border-radius:7px;padding:10px 14px;font-size:13px;color:#92400e">'
+          +'&#9888; No emails sent — all '+(skipped.length)+' selected customer(s) have no statement rows in the aging data.'
+        +'</div>'
+        +(skipped.length ? '<div style="margin-top:6px;font-size:12px;color:var(--gray)">Skipped: '+skipped.map(function(p){return esc(p.name);}).join(', ')+'</div>' : '');
       return;
     }
 
@@ -1548,15 +1881,22 @@ function runViaPowerAutomate() {
             +'<span style="color:var(--green);margin-left:auto">'+fmtUSD(p.totalBal)+'</span>'
             +'</div>';
         }).join('');
+        var skipNote = skipped.length
+          ? '<div style="margin-top:6px;background:var(--yellow-l,#fffbeb);border:1px solid var(--yellow-b,#fcd34d);border-radius:7px;padding:8px 12px;font-size:12px;color:#92400e">'
+              +'&#9888; <strong>'+skipped.length+' skipped</strong> (no statement rows): '
+              +skipped.map(function(p){return esc(p.name);}).join(', ')
+            +'</div>'
+          : '';
         if(results) results.innerHTML =
           '<div style="background:var(--green-l);border:1px solid var(--green-b);border-radius:7px;padding:10px 14px;font-size:13px;color:var(--green);margin-bottom:8px">'
             +'&#10003; <strong>Flow triggered</strong> — Power Automate will send '
-            +custs.length+' statement(s) from NVARCollection@nvidia.com. '
+            +customerPayloads.length+' statement(s) from NVARCollection@nvidia.com. '
             +'Each email already has the correct columns and Excel attached.'
           +'</div>'
           +'<div style="border:1px solid var(--border);border-radius:7px;padding:8px 12px">'
             +cards
-          +'</div>';
+          +'</div>'
+          +skipNote;
       } else {
         return res.text().then(function(t){ throw new Error('HTTP '+res.status+': '+t.slice(0,200)); });
       }
@@ -1568,7 +1908,7 @@ function runViaPowerAutomate() {
           +'&#10007; PA trigger failed: '+esc(err.message)
         +'</div>';
     });
-  }, 50);
+  }, 50); }); // end refreshSenderProfile + setTimeout
 }
 
 // ── GRAPH BATCH SEND ─────────────────────────────────────────────────────────
@@ -1603,12 +1943,21 @@ function runEmailBatch(mode) {
       html += '<div style="margin-bottom:8px"><div style="font-size:12px;font-weight:600;color:var(--green);margin-bottom:4px">'
         +'&#10003; '+(mode==='draft'?'Saved to Drafts':'Sent')+': '+successes.length+'</div>'
         +successes.map(function(c){ return '<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">'
-          +'<span class="bdg bdg-green">&#10003;</span> '+esc(c.name)+'</div>'; }).join('')+'</div>';
+          +'<span class="bdg bdg-green">&#10003;</span> '+custLabel(c)+'</div>'; }).join('')+'</div>';
     }
     if(failures.length) {
-      html += '<div><div style="font-size:12px;font-weight:600;color:var(--red);margin-bottom:4px">&#10007; Failed: '+failures.length+'</div>'
-        +failures.map(function(f){ return '<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">'
-          +'&#10007; '+esc(f.cust.name)+' — '+esc(f.err)+'</div>'; }).join('')+'</div>';
+      var skippedEmpty = failures.filter(function(f){ return f.err==='No statement rows — email not sent'; });
+      var realFails    = failures.filter(function(f){ return f.err!=='No statement rows — email not sent'; });
+      if(skippedEmpty.length) {
+        html += '<div style="margin-bottom:6px"><div style="font-size:12px;font-weight:600;color:#92400e;margin-bottom:4px">&#9888; Skipped (no rows): '+skippedEmpty.length+'</div>'
+          +skippedEmpty.map(function(f){ return '<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border);color:#92400e">'
+            +'&#9888; '+custLabel(f.cust)+' (#'+esc(f.cust.custno)+') — no statement rows</div>'; }).join('')+'</div>';
+      }
+      if(realFails.length) {
+        html += '<div><div style="font-size:12px;font-weight:600;color:var(--red);margin-bottom:4px">&#10007; Failed: '+realFails.length+'</div>'
+          +realFails.map(function(f){ return '<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">'
+            +'&#10007; '+custLabel(f.cust)+' — '+esc(f.err)+'</div>'; }).join('')+'</div>';
+      }
     }
     results.innerHTML = html;
   }
@@ -1622,6 +1971,16 @@ function runEmailBatch(mode) {
     }
     var cust = custs[idx];
     var filtered = filterAgingForCustomer(cust);
+
+    // Skip customers with no statement rows — do not send an empty email
+    if(!filtered.length) {
+      console.warn('[CSS] Skipping '+cust.name+' (#'+cust.custno+') — no statement rows.');
+      failures.push({cust:cust, err:'No statement rows — email not sent'});
+      done++; updateProgress();
+      setTimeout(function(){ processNext(idx+1); }, 0);
+      return;
+    }
+
     if(progTxt) progTxt.textContent = 'Processing '+esc(cust.name)+'...';
 
     var promise;
@@ -1638,8 +1997,10 @@ function runEmailBatch(mode) {
     .catch(function(err){ failures.push({cust:cust, err:err.message||String(err)}); })
     .then(function(){ done++; updateProgress(); setTimeout(function(){ processNext(idx+1); }, mode==='eml'?800:500); });
   }
-  updateProgress();
-  processNext(0);
+  refreshSenderProfile().then(function() {
+    updateProgress();
+    processNext(0);
+  });
 }
 
 // ── GRAPH SEND/DRAFT ─────────────────────────────────────────────────────────
@@ -1647,19 +2008,20 @@ function buildGraphMessage(cust, filtered) {
   var today = new Date().toISOString().split('T')[0];
   var todayFmt = new Date().toLocaleDateString();
   var tplSubj = ((G('tpl-subject')||{}).value||'Account Statement - {CustomerName} - {Date}').trim();
-  var tplBody = ((G('tpl-body')||{}).value||'Dear {CustomerName},\n\nPlease find attached your account statement as of {Date}.\n\nBest regards,\nNVIDIA AR Collections').trim();
+  var tplBody = ((G('tpl-body')||{}).value||'Dear {CustomerName},\n\nEnclosed Please find attached your account statement as of {Date}.\n\nAppreciate your feedback if you find any discrepancies.\n\nIf you have any query please contact us.').trim();
   var collector = cust.collector||'';
-  var subj = tplSubj.replace(/{CustomerName}/g,cust.name).replace(/{Date}/g,todayFmt).replace(/{Collector}/g,collector);
-  var body = tplBody.replace(/{CustomerName}/g,cust.name).replace(/{Date}/g,todayFmt).replace(/{Collector}/g,collector);
+  var subj     = applyBodyPlaceholders(tplSubj, cust, collector);
+  var bodyPlain= applyBodyPlaceholders(tplBody, cust, collector);
+  var body     = buildHtmlEmailBody(bodyPlain, cust, collector);
   var toArr = (cust.to||[]).filter(function(e){return e&&e.trim();});
   var ccArr = (cust.cc||[]).filter(function(e){return e&&e.trim();});
   if(collector&&collector.trim()&&ccArr.indexOf(collector.trim())===-1) ccArr.push(collector.trim());
   var xlsBuf = buildStatementXLSBuf(cust, filtered);
   var xlsB64 = arrayBufferToBase64(xlsBuf);
-  var xlsFname = 'Statement_'+cust.custno+'_'+today+'.xlsx';
+  var xlsFname = 'Statement_'+cust.custno+fileTag(cust)+'_'+today+'.xlsx';
   return {
     subject: subj, importance:'normal',
-    body: { contentType:'text', content:body },
+    body: { contentType:'HTML', content:body },
     toRecipients: toArr.map(function(e){return {emailAddress:{address:e}};}),
     ccRecipients: ccArr.map(function(e){return {emailAddress:{address:e}};}),
     attachments: [{ '@odata.type':'#microsoft.graph.fileAttachment',
@@ -1777,21 +2139,29 @@ function renderChecklist() {
     +'</div>';
     groups[grp].forEach(function(c){
       var selected = CSS_ST._checklistSel&&CSS_ST._checklistSel[c.id];
-      html+='<div style="display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid #f9fafb" data-cid="'+c.id+'">'
+      var ec = effCust(c);
+      var fsum = filterSummary(ec);
+      var isOpen = CSS_ST._adhocOpen && CSS_ST._adhocOpen[c.id];
+      html+='<div class="cl-row" style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid #f9fafb" data-cid="'+c.id+'">'
         +'<input type="checkbox" class="cust-chk" data-cid="'+c.id+'"'+(selected?' checked':'')+' style="cursor:pointer;flex-shrink:0">'
         +'<div style="flex:1;min-width:0">'
           +'<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(c.name)+'</div>'
           +'<div style="font-size:11px;color:var(--gray)">#'+esc(c.custno)
             +(c.to&&c.to.length?' &bull; '+esc(c.to[0]):'')
             +' <span class="bdg bdg-gray">'+esc(c.schedule)+'</span>'
+            +' <span class="bdg bdg-amber adhoc-badge" style="'+(ec._adhoc?'':'display:none')+'">edited</span>'
           +'</div>'
+          +'<div class="adhoc-sum" style="font-size:11px;color:#6b7280;'+(fsum?'':'display:none')+'">'+esc(fsum)+'</div>'
         +'</div>'
+        +'<button class="btn btn-outline btn-sm adhoc-tog" data-cid="'+c.id+'" style="flex-shrink:0">&#9881; Filters</button>'
+        +(isOpen ? adhocPanelHTML(c) : '')
       +'</div>';
     });
   });
 
   el.innerHTML = html;
   wireChecklist();
+  wireChecklistAdhocClicks();
   updateChecklistCount();
 }
 
@@ -1801,7 +2171,9 @@ function wireChecklist() {
   el.addEventListener('change', function(e){
     var t=e.target;
     if(!CSS_ST._checklistSel) CSS_ST._checklistSel={};
-    if(t.classList.contains('cust-chk')){
+    if(t.classList.contains('adhoc-in')){
+      adhocOnChange(t);
+    } else if(t.classList.contains('cust-chk')){
       var cid=Number(t.getAttribute('data-cid'));
       CSS_ST._checklistSel[cid]=t.checked;
       updateChecklistCount();
@@ -1822,6 +2194,27 @@ function wireChecklist() {
   });
 }
 
+function wireChecklistAdhocClicks() {
+  var el=G('cust-checklist'); if(!el||el._adhocWired) return;
+  el._adhocWired=true;
+  el.addEventListener('click', function(e){
+    var b=e.target; while(b&&b!==el&&!(b.classList&&(b.classList.contains('adhoc-tog')||b.classList.contains('adhoc-reset')||b.classList.contains('adhoc-save')))) b=b.parentNode;
+    if(!b||b===el) return;
+    var cid=Number(b.getAttribute('data-cid'));
+    if(b.classList.contains('adhoc-tog')){
+      if(!CSS_ST._adhocOpen) CSS_ST._adhocOpen={};
+      CSS_ST._adhocOpen[cid]=!CSS_ST._adhocOpen[cid];
+      renderChecklist();
+    } else if(b.classList.contains('adhoc-reset')){
+      if(CSS_ST._adhoc) delete CSS_ST._adhoc[cid];
+      renderChecklist(); updateChecklistCount();
+      var area=G('prev-area'); if(area&&area.querySelector('.prev-tbl')&&CSS_ST.agingLoaded) renderPreview();
+    } else if(b.classList.contains('adhoc-save')){
+      adhocSaveToSetup(cid);
+    }
+  });
+}
+
 function updateChecklistCount() {
   var sel=getChecklistSelected();
   txt('checklist-count', sel.length+' customer(s) selected');
@@ -1830,7 +2223,7 @@ function updateChecklistCount() {
 
 function getChecklistSelected() {
   if(!CSS_ST._checklistSel) return [];
-  return CSS_ST.customers.filter(function(c){ return CSS_ST._checklistSel[c.id]; });
+  return CSS_ST.customers.filter(function(c){ return CSS_ST._checklistSel[c.id]; }).map(effCust);
 }
 
 function populatePreviewDropdownFromChecklist(sel) {
@@ -1880,28 +2273,28 @@ function buildAndDownloadEML(cust, filtered) {
 
   // Use Email Template fields from Filters & Columns tab
   var tplSubj=((G('tpl-subject')||{}).value||'Account Statement - {CustomerName} - {Date}').trim();
-  var tplBody=((G('tpl-body')||{}).value||'Dear {CustomerName},\n\nPlease find attached your account statement as of {Date}.\n\nBest regards,\nNVIDIA AR Collections').trim();
+  var tplBody=((G('tpl-body')||{}).value||'Dear {CustomerName},\n\nEnclosed Please find attached your account statement as of {Date}.\n\nAppreciate your feedback if you find any discrepancies.\n\nIf you have any query please contact us.').trim();
 
-  var subj=tplSubj
-    .replace(/{CustomerName}/g,cust.name)
-    .replace(/{Date}/g,todayFmt)
-    .replace(/{Collector}/g,collector);
-  var bodyText=tplBody
-    .replace(/{CustomerName}/g,cust.name)
-    .replace(/{Date}/g,todayFmt)
-    .replace(/{Collector}/g,collector);
+  var subj    = applyBodyPlaceholders(tplSubj, cust, collector);
+  var bodyText= applyBodyPlaceholders(tplBody, cust, collector);
+  var bodyHtml= buildHtmlEmailBody(bodyText, cust, collector);
 
   // Attachments
   var xlsBuf  =buildStatementXLSBuf(cust,filtered);
   var xlsB64  =arrayBufferToBase64(xlsBuf);
-  var xlsFname='Statement_'+cust.custno+'_'+today+'.xlsx';
+  var xlsFname='Statement_'+cust.custno+fileTag(cust)+'_'+today+'.xlsx';
 
   var htmlContent=buildStatementHTML(cust,filtered);
   var htmlBytes  =new TextEncoder().encode(htmlContent);
   var htmlB64    =arrayBufferToBase64(htmlBytes.buffer);
-  var htmlFname  ='Statement_'+cust.custno+'_'+today+'.html';
+  var htmlFname  ='Statement_'+cust.custno+fileTag(cust)+'_'+today+'.html';
 
   var boundary='NvidiaAR_'+Date.now()+'_bound';
+  var altBound ='NvidiaAR_'+Date.now()+'_alt';
+
+  // Encode HTML body as base64 for the EML alternative part
+  var bodyHtmlBytes = new TextEncoder().encode(bodyHtml);
+  var bodyHtmlB64   = arrayBufferToBase64(bodyHtmlBytes.buffer);
 
   var emlLines=[
     'MIME-Version: 1.0',
@@ -1912,12 +2305,23 @@ function buildAndDownloadEML(cust, filtered) {
     'X-Unsent: 1',
     'Content-Type: multipart/mixed; boundary="'+boundary+'"',
     '',
-    // Part 1: plain text body from template
+    // Part 1: multipart/alternative wrapper (plain text + HTML with logo)
     '--'+boundary,
+    'Content-Type: multipart/alternative; boundary="'+altBound+'"',
+    '',
+    '--'+altBound,
     'Content-Type: text/plain; charset=utf-8',
     'Content-Transfer-Encoding: quoted-printable',
     '',
     encodeQP(bodyText),
+    '',
+    '--'+altBound,
+    'Content-Type: text/html; charset=utf-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    bodyHtmlB64.match(/.{1,76}/g).join('\r\n'),
+    '',
+    '--'+altBound+'--',
     '',
     // Part 2: Excel attachment
     '--'+boundary,
@@ -1941,7 +2345,7 @@ function buildAndDownloadEML(cust, filtered) {
   var blob=new Blob([emlLines],{type:'message/rfc822'});
   var url=URL.createObjectURL(blob);
   var a=document.createElement('a');
-  a.href=url; a.download='Statement_'+cust.custno+'_'+today+'.eml';
+  a.href=url; a.download='Statement_'+cust.custno+fileTag(cust)+'_'+today+'.eml';
   document.body.appendChild(a); a.click();
   document.body.removeChild(a);
   setTimeout(function(){URL.revokeObjectURL(url);},3000);
@@ -1966,7 +2370,11 @@ function buildStatementXLS(cust, filtered) {
     cols.forEach(function(c){
       var key=COL_KEY_MAP[c]||c;
       var val=getRowVal(r,c,key);
-      obj[c]=val===null||val===undefined?'':val;
+      if(DATE_COLS.indexOf(c)>-1) {
+        obj[c] = fmtDate(val);
+      } else {
+        obj[c]=val===null||val===undefined?'':val;
+      }
     });
     return obj;
   });
@@ -1989,7 +2397,7 @@ function buildStatementXLSBuf(cust, filtered) {
 function downloadStatementXLS(cust, filtered) {
   var buf    = buildStatementXLSBuf(cust,filtered);
   var today  = new Date().toISOString().split('T')[0];
-  var fname  = 'Statement_'+cust.custno+'_'+today+'.xlsx';
+  var fname  = 'Statement_'+cust.custno+fileTag(cust)+'_'+today+'.xlsx';
   var blob   = new Blob([new Uint8Array(buf)],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   var url    = URL.createObjectURL(blob);
   var a      = document.createElement('a'); a.href=url; a.download=fname;
@@ -2434,46 +2842,39 @@ function spGetLockStatus() {
 }
 
 // ── FORCE UNLOCK ─────────────────────────────────────────
-// Called by the "Force Unlock" button in the error bar.
-// Uses SP admin override endpoint if regular UndoCheckOut fails.
+// Uses AddUsingPath?overwrite=true which bypasses checkout locks.
+// No CheckOut/CheckIn/UndoCheckOut needed — SP overwrites regardless.
 function forceUnlockAndSave() {
   var errBar = G('err-bar');
   if(errBar) errBar.style.display = 'none';
-  var filePath = SP_BASE+'/'+SP_FOLDER+'/'+SETUP_FILE;
 
-  function spForceOp(action) {
-    var url = spOrigin()+SP_BASE
-      +"/_api/web/GetFileByServerRelativePath(decodedurl='"+filePath+"')/"+action
-      +(action==='CheckIn' ? "(comment='Force unlock by Customer Statement Setup',checkintype=1)" : '');
-    return getDigest().then(function(digest){
-      return fetch(url, {
-        method: 'POST',
-        headers: { 'Accept':'application/json;odata=verbose', 'X-RequestDigest': digest, 'Content-Length':'0' },
-        credentials: 'include'
-      });
-    });
+  var btn  = G('btn-force-unlock');
+  var btnM = G('btn-force-unlock-main');
+  function setBtnState(txt, disabled) {
+    [btn, btnM].forEach(function(b){ if(b){ b.disabled=disabled; b.textContent=txt; } });
   }
 
-  showOk('Forcing file unlock — please wait…');
-  var btn = G('btn-force-unlock'); if(btn){ btn.disabled=true; btn.textContent='Unlocking…'; }
+  setBtnState('Saving…', true);
+  showOk('Force-saving — bypassing checkout lock…');
 
-  // Try UndoCheckOut first (works if current user owns checkout)
-  // Then try again without checking result — SP may silently ignore if not owner
-  // Then wait for SP propagation and do direct PUT
-  spForceOp('UndoCheckOut')
-  .catch(function(){ return {ok:false}; })
-  .then(function(){
-    return new Promise(function(res){ setTimeout(res, 3000); });
-  }).then(function(){
-    // Second UndoCheckOut attempt after wait — catches cases where first was ignored
-    return spForceOp('UndoCheckOut').catch(function(){ return {ok:false}; });
-  }).then(function(){
-    return new Promise(function(res){ setTimeout(res, 2000); });
-  }).then(function(){
-    // Now attempt the save
-    pushToSharePoint('manual', null, function(){
-      if(btn){ btn.disabled=false; btn.textContent='🔓 Force Unlock & Save'; }
-    });
+  var buf, ab;
+  try { buf = buildSetupXlsx(); ab = new Uint8Array(buf).buffer; }
+  catch(e) { setBtnState('🔓 Force Unlock & Save', false); showErr('Build error: '+e.message); return; }
+
+  spSaveForce(SETUP_FILE, ab).then(function(res) {
+    setBtnState('🔓 Force Unlock & Save', false);
+    if(res.ok) {
+      stamp();
+      showOk('✅ Saved successfully (checkout lock bypassed).');
+    } else {
+      res.text().then(function(t){
+        showErr('Force save failed HTTP '+res.status+': '+t.slice(0,200)
+          +'. Please go to the SharePoint library, right-click the file → Discard checkout, then try again.');
+      });
+    }
+  }).catch(function(e){
+    setBtnState('🔓 Force Unlock & Save', false);
+    showErr('Force save error: '+(e&&e.message||String(e)));
   });
 }
 
@@ -2488,19 +2889,6 @@ function pushToSharePoint(saveTrigger, modalSaveBtn, onSuccess) {
   }
 
   var filePath = SP_BASE+'/'+SP_FOLDER+'/'+SETUP_FILE;
-
-  function spFileOp(action) {
-    var url = spOrigin()+SP_BASE
-      +"/_api/web/GetFileByServerRelativePath(decodedurl='"+filePath+"')/"+action
-      +(action==='CheckIn' ? "(comment='Auto-save from Customer Statement Setup',checkintype=1)" : '');
-    return getDigest().then(function(digest){
-      return fetch(url, {
-        method: 'POST',
-        headers: { 'Accept':'application/json;odata=verbose', 'X-RequestDigest': digest, 'Content-Length':'0' },
-        credentials: 'include'
-      });
-    }).catch(function(){ return {ok:false}; });
-  }
 
   function showLockError(extraMsg) {
     resetBtns();
@@ -2533,8 +2921,10 @@ function pushToSharePoint(saveTrigger, modalSaveBtn, onSuccess) {
     }
     if(spBtn) spBtn.textContent='Saving…';
 
-    // ── Attempt 1: direct PUT ──────────────────────────────────────────────
-    spSave(SETUP_FILE, ab).then(function(res) {
+    // Use AddUsingPath?overwrite=true — SP Online's native upload endpoint.
+    // Works without checkout. Only fails if file has an exclusive server-side lock
+    // (i.e. someone manually checked it out in the SP library UI).
+    spSaveForce(SETUP_FILE, ab).then(function(res) {
       if(res.ok) {
         stamp(); resetBtns();
         var action = saveTrigger==='delete'?'removed':saveTrigger==='modal'?'updated':'saved';
@@ -2542,42 +2932,21 @@ function pushToSharePoint(saveTrigger, modalSaveBtn, onSuccess) {
         if(onSuccess) onSuccess();
         return;
       }
-      throw new Error('HTTP '+res.status);
-    }).catch(function(err) {
-      var msg = (err && err.message) || String(err);
-      var is423 = msg.indexOf('423') > -1 || msg.indexOf('locked') > -1 || msg.indexOf('checked') > -1;
-      if(!is423) {
-        resetBtns();
-        showErr('SharePoint write failed: '+msg);
-        return;
-      }
-
-      // ── Attempt 2: UndoCheckOut → wait → PUT directly (skip CheckOut/CheckIn) ──
-      // Most SP Online locks are co-authoring locks (not checkout locks).
-      // UndoCheckOut releases checkout locks; co-authoring locks expire on their own.
-      showOk('File locked — releasing checkout and retrying…');
-      spFileOp('UndoCheckOut').then(function(){
-        return new Promise(function(res){ setTimeout(res, 3000); });
-      }).then(function(){
-        var buf2 = buildSetupXlsx();
-        return spSave(SETUP_FILE, new Uint8Array(buf2).buffer);
-      }).then(function(res2){
-        if(res2.ok) {
-          stamp(); resetBtns();
-          var action = saveTrigger==='delete'?'removed':saveTrigger==='modal'?'updated':'saved';
-          showOk('SharePoint updated — SetupCustomerSchedule.xlsx '+action+' successfully.');
-          if(onSuccess) onSuccess();
+      return res.text().then(function(t){
+        var is423 = res.status === 423 || t.indexOf('423') > -1 || t.indexOf('lock') > -1 || t.indexOf('checked') > -1;
+        if(is423) {
+          showLockError('HTTP '+res.status);
         } else {
-          showLockError('HTTP '+res2.status+' on retry');
+          resetBtns();
+          showErr('SharePoint write failed HTTP '+res.status+': '+t.slice(0,200));
         }
-      }).catch(function(err2){
-        showLockError((err2&&err2.message)||String(err2));
       });
+    }).catch(function(err){
+      showLockError((err&&err.message)||String(err));
     });
   }
 
-  // Pre-flight: release any stale checkout owned by current user, then save
-  spFileOp('UndoCheckOut').then(doSave).catch(doSave);
+  doSave();
 }
 
 // Manual save button on Preview tab (same core)
@@ -2723,7 +3092,7 @@ function exportPowerAutomate() {
 function exportPython() {
   var cols = CSS_ST.selectedCols.length?CSS_ST.selectedCols:DEFAULT_COLS;
   var subj = (G('tpl-subject')||{}).value||'Account Statement -- {CustomerName} -- {Date}';
-  var body = (G('tpl-body')||{}).value||'Dear {CustomerName},\n\nPlease find your statement attached.\n\nBest regards,\n{Collector}';
+  var body = (G('tpl-body')||{}).value||'Dear {CustomerName},\n\nEnclosed Please find attached your account statement as of {Date}.\n\nAppreciate your feedback if you find any discrepancies.\n\nIf you have any query please contact us.\n\nBest regards,\n{Collector}';
 
   var py = '#!/usr/bin/env python3\n'
     +'"""\nNVIDIA AR - Customer Statement Email Automation\nGenerated: '+new Date().toISOString()+'\n'
@@ -3001,7 +3370,20 @@ function wireEvents() {
   var btnPrevAll=G('btn-prev-all');
   if(btnPrevAll) btnPrevAll.addEventListener('click', function(){
     if(!CSS_ST._checklistSel) CSS_ST._checklistSel={};
-    CSS_ST.customers.forEach(function(c){ CSS_ST._checklistSel[c.id]=true; });
+    // Select only the currently filtered customers (all pages, not just current page)
+    var col    = (G('filter-collector')||{}).value||'';
+    var grpFlt = (G('filter-group')||{}).value||'';
+    var srch   = ((G('prev-cust-search')||{}).value||'').toLowerCase().trim();
+    CSS_ST.customers.forEach(function(c){
+      if(col && c.collector!==col && !(c.cc&&c.cc.indexOf(col)>-1)) return;
+      if(grpFlt && (c.group||'')!==grpFlt) return;
+      if(srch) {
+        var all=[c.custno,c.name,c.to.join(' '),c.group||'',c.collector||''].join(' ').toLowerCase();
+        if(all.indexOf(srch)===-1) return;
+      }
+      CSS_ST._checklistSel[c.id]=true;
+    });
+    // Check all visible checkboxes on the current page
     var chks=document.querySelectorAll('.cust-chk');
     for(var i=0;i<chks.length;i++) chks[i].checked=true;
     updateChecklistCount();
@@ -3087,13 +3469,6 @@ function wireEvents() {
   var btnDraftDirect=G('btn-save-draft-direct');
   if(btnDraftDirect) btnDraftDirect.addEventListener('click', function(){ sendDirectly('draft'); });
 
-
-  // Option C: Send directly via Graph
-  var btnSendDirect=G('btn-send-direct');
-  if(btnSendDirect) btnSendDirect.addEventListener('click', function(){ sendDirectly('send'); });
-  var btnDraftDirect=G('btn-save-draft-direct');
-  if(btnDraftDirect) btnDraftDirect.addEventListener('click', function(){ sendDirectly('draft'); });
-
   // Save / export buttons
   var btnSaveSP=G('btn-save-sp'), btnDlXl=G('btn-download-xl');
   var btnExPa=G('btn-export-pa'), btnExPy=G('btn-export-py');
@@ -3126,3 +3501,121 @@ if(document.readyState==='loading') {
 } else {
   boot();
 }
+
+// NVIDIA logo (base64 PNG) for use in HTML email signatures
+var NVIDIA_LOGO_B64 = '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';
+var NVIDIA_LOGO_HTML = '<img src="data:image/png;base64,' + NVIDIA_LOGO_B64 + '" alt="NVIDIA" style="height:32px;margin-top:8px;display:block">';
+
+// ── Fetch current user profile for email signature ────────────────────────────
+// Strategy: Graph /me first (most reliable for jobTitle + mobilePhone),
+// then SharePoint GetMyProperties as fallback with correct SP key names.
+function applyProfileToSignature(name, title, workPhone, mobile, email) {
+  CSS_ST._senderName      = name      || CSS_ST._senderName      || '';
+  CSS_ST._senderTitle     = title     || CSS_ST._senderTitle     || '';
+  CSS_ST._senderWorkPhone = workPhone || CSS_ST._senderWorkPhone || '';
+  CSS_ST._senderMobile    = mobile    || CSS_ST._senderMobile    || '';
+  CSS_ST._senderEmail     = email     || CSS_ST._senderEmail     || '';
+
+  // Clean the body template textarea on first load:
+  // remove {CurrentUser} token and any legacy plain-text signature tail
+  const textarea = document.getElementById('tpl-body');
+  if (textarea) {
+    var tv = textarea.value;
+    tv = tv.replace(/\s*{CurrentUser}/g, '');
+    tv = tv.replace(/\s*Best regards,[\s\S]*$/i, '').trimEnd();
+    textarea.value = tv;
+  }
+}
+
+// Stage 1: SharePoint GetMyProperties — no auth token needed, runs immediately at boot.
+// Logs ALL property keys to console so we can identify the correct ones for this tenant.
+fetch('/_api/SP.UserProfiles.PeopleManager/GetMyProperties', {
+  headers: { 'Accept': 'application/json;odata=verbose' }
+}).then(function(res) { return res.json(); })
+.then(function(data) {
+  var props = (data.d && data.d.UserProfileProperties && data.d.UserProfileProperties.results) || [];
+  var get = function(key) { return (props.find(function(p){ return p.Key === key; }) || {}).Value || ''; };
+
+  // Log ALL non-empty keys so we can find the correct ones for this tenant
+  console.log('[CSS] SP profile keys:', props.filter(function(p){ return p.Value; }).map(function(p){ return p.Key+'='+p.Value; }));
+
+  // Try every known SP key variant for job title and mobile
+  var jobTitleCandidates = ['SPS-JobTitle','JobTitle','Title','Department','SPS-Department'];
+  var mobileCandidates   = ['SPS-CellPhone','CellPhone','Mobile','SPS-PhoneticDisplayName','HomePhone'];
+  jobTitleCandidates.forEach(function(k){ if(get(k)) console.log('[CSS] job title candidate: '+k+'='+get(k)); });
+  mobileCandidates.forEach(function(k){   if(get(k)) console.log('[CSS] mobile candidate: '+k+'='+get(k)); });
+
+  // Find first non-empty value from a list of candidate keys
+  function firstOf(keys) { for(var i=0;i<keys.length;i++){ var v=get(keys[i]); if(v) return v; } return ''; }
+
+  applyProfileToSignature(
+    get('PreferredName'),
+    firstOf(['SPS-JobTitle','JobTitle','Title']),
+    firstOf(['WorkPhone','SPS-WorkPhone']),
+    firstOf(['SPS-CellPhone','CellPhone','Mobile','HomePhone']),
+    get('WorkEmail')
+  );
+
+  // Stage 2a: SharePoint Graph proxy — available on any SP page, no extra token needed.
+  // Returns the AAD profile including jobTitle and mobilePhone.
+  fetch('/_api/v2.0/me?$select=displayName,mail,jobTitle,mobilePhone,businessPhones', {
+    headers: { 'Accept': 'application/json' }
+  }).then(function(r){ return r.ok ? r.json() : Promise.reject(r.status); })
+  .then(function(me) {
+    var workPhone = (me.businessPhones && me.businessPhones[0]) || '';
+    console.log('[CSS] SP Graph proxy: jobTitle='+me.jobTitle+' mobile='+me.mobilePhone);
+    applyProfileToSignature(
+      me.displayName || '',
+      me.jobTitle    || '',
+      workPhone,
+      me.mobilePhone || '',
+      me.mail        || ''
+    );
+  }).catch(function(e) {
+    console.log('[CSS] SP Graph proxy not available ('+e+'), will try Graph token if present');
+    // Stage 2b: If a Graph token is already in memory (user connected Outlook),
+    // enrich with Graph /me directly. No popup triggered.
+    if(GRAPH_TOKEN && Date.now() < GRAPH_TOKEN_EXP - 300000) {
+      fetch('https://graph.microsoft.com/v1.0/me?$select=displayName,mail,jobTitle,mobilePhone,businessPhones', {
+        headers: { 'Authorization': 'Bearer ' + GRAPH_TOKEN }
+      }).then(function(r){ return r.json(); })
+      .then(function(me) {
+        var workPhone = (me.businessPhones && me.businessPhones[0]) || '';
+        applyProfileToSignature(
+          me.displayName || '',
+          me.jobTitle    || '',
+          workPhone,
+          me.mobilePhone || '',
+          me.mail        || ''
+        );
+        console.log('[CSS] Graph token enriched: jobTitle='+me.jobTitle+' mobile='+me.mobilePhone);
+      }).catch(function(){});
+    }
+  });
+}).catch(function(e) {
+  console.warn('[CSS] Could not load SP user profile for signature:', e);
+});
+
+// When the user connects Outlook (Graph token acquired), re-fetch profile from Graph
+// to pick up jobTitle and mobilePhone without needing a page reload.
+var _origShowGraphConnected = typeof showGraphConnected === 'function' ? showGraphConnected : null;
+showGraphConnected = function(me) {
+  if(_origShowGraphConnected) _origShowGraphConnected(me);
+  // Enrich signature with full Graph profile
+  if(GRAPH_TOKEN) {
+    fetch('https://graph.microsoft.com/v1.0/me?$select=displayName,mail,jobTitle,mobilePhone,businessPhones', {
+      headers: { 'Authorization': 'Bearer ' + GRAPH_TOKEN }
+    }).then(function(r){ return r.json(); })
+    .then(function(prof) {
+      var workPhone = (prof.businessPhones && prof.businessPhones[0]) || '';
+      applyProfileToSignature(
+        prof.displayName || '',
+        prof.jobTitle    || '',
+        workPhone,
+        prof.mobilePhone || '',
+        prof.mail        || ''
+      );
+      console.log('[CSS] Signature enriched on Outlook connect: jobTitle='+prof.jobTitle);
+    }).catch(function(){});
+  }
+};
